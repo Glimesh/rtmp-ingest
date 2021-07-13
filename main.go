@@ -2,9 +2,9 @@ package main
 
 import (
 	"fmt"
-	"github.com/glimesh/rtmp-ingest/pkg/orchestrator"
-	"github.com/glimesh/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/glimesh/rtmp-ingest/pkg/services/glimesh"
+	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/clone1018/rtmp-ingest/pkg/services/glimesh"
 	"log"
 	"net"
 	"os"
