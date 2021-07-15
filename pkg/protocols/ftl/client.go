@@ -6,7 +6,6 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -14,12 +13,14 @@ import (
 )
 
 type Conn struct {
-	Connected bool
+	Connected         bool
 	AssignedMediaPort int
 
 	controlConn    net.Conn
 	controlScanner *bufio.Scanner
 	mediaConn      net.Conn
+
+	quitTimer chan bool
 }
 
 func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err error) {
@@ -38,6 +39,7 @@ func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err erro
 
 func (conn *Conn) Close() {
 	conn.Connected = false
+	conn.quitTimer <- true
 	conn.controlConn.Close()
 }
 
@@ -60,10 +62,8 @@ func (conn *Conn) authenticateControlConnection(channelID uint32, streamKey []by
 
 	hmacPayload := hash.Sum(nil)
 
-	fmt.Printf("HMacPayload: %v\n", hmacPayload)
-
 	conn.sendControlMessage(fmt.Sprintf(requestConnect, channelID, hex.EncodeToString(hmacPayload)))
-	fmt.Println(conn.readControlMessage())
+	conn.readControlMessage()
 
 	// fake for now
 	attrs := []string{
@@ -75,7 +75,7 @@ func (conn *Conn) authenticateControlConnection(channelID uint32, streamKey []by
 		"VideoHeight: 720",
 		"VideoWidth: 1280",
 		"VideoPayloadType: 96",
-		fmt.Sprintf(metaVideoIngestSSRC, channelID + 1),
+		fmt.Sprintf(metaVideoIngestSSRC, channelID+1),
 		"Audio: true",
 		"AudioCodec: OPUS",
 		"AudioPayloadType: 97",
@@ -93,13 +93,11 @@ func (conn *Conn) authenticateControlConnection(channelID uint32, streamKey []by
 		conn.Close()
 		return err
 	}
-	fmt.Printf("Matches: %+v\n", matches)
 	conn.AssignedMediaPort, err = strconv.Atoi(matches[0][1])
 	if err != nil {
 		conn.Close()
 		return err
 	}
-	fmt.Printf("Media port %d\n", conn.AssignedMediaPort)
 
 	go conn.heartbeat()
 	return nil
@@ -112,16 +110,16 @@ func (conn *Conn) heartbeat() {
 	// Currently two commands could go out at the same time and we could get the responses confused
 	// Assuming the server is handling our commands async anyway
 	ticker := time.NewTicker(5 * time.Second)
-	quit := make(chan struct{})
+	conn.quitTimer = make(chan bool)
 	go func() {
 		for {
 			select {
-			case <- ticker.C:
+			case <-ticker.C:
 				conn.sendControlMessage(requestPing)
 				if conn.readControlMessage() != "201" {
 					conn.Close()
 				}
-			case <- quit:
+			case <-conn.quitTimer:
 				ticker.Stop()
 				return
 			}
@@ -131,16 +129,15 @@ func (conn *Conn) heartbeat() {
 
 func (conn *Conn) sendControlMessage(message string) error {
 	final := message + "\r\n\r\n"
-	log.Printf("SEND: %q", final)
+	// log.Printf("SEND: %q", final)
 	_, err := conn.controlConn.Write([]byte(final))
 	return err
 }
 func (conn *Conn) readControlMessage() string {
 	for conn.controlScanner.Scan() {
 		recv := conn.controlScanner.Text()
-		log.Printf("RECV: %q", recv)
+		// log.Printf("RECV: %q", recv)
 		return recv
 	}
 	return ""
 }
-

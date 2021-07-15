@@ -60,7 +60,6 @@ func (s *Service) GetHmacKey(channelID uint32) ([]byte, error) {
 	if err != nil {
 		return []byte{}, err
 	}
-	fmt.Printf("API Response: %+v\n", hmacQuery)
 	return []byte(hmacQuery.Channel.HmacKey), nil
 }
 

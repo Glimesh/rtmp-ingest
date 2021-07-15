@@ -4,6 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+
 	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
 	"github.com/clone1018/rtmp-ingest/pkg/services"
 	"github.com/pion/rtp"
@@ -12,30 +18,20 @@ import (
 	flvtag "github.com/yutopp/go-flv/tag"
 	"github.com/yutopp/go-rtmp"
 	rtmpmsg "github.com/yutopp/go-rtmp/message"
-	"io"
-	"log"
-	"net"
-	"strconv"
-	"strings"
 )
 
-func NewRTMPServer(service services.Service, orch *orchestrator.Connection) {
-	log.Println("Starting RTMP Server on :1935")
+func NewRTMPServer(service services.Service, orch *orchestrator.Client, log logrus.FieldLogger) {
+	log.Info("Starting RTMP Server on :1935")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", ":1935")
 	if err != nil {
-		log.Panicf("Failed: %+v", err)
+		log.Fatal(err)
 	}
 
 	listener, err := net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
-		log.Panicf("Failed: %+v", err)
+		log.Fatal(err)
 	}
-
-	// If you need to debug the internals of the lib
-	l := logrus.StandardLogger()
-	//l.SetLevel(logrus.DebugLevel)
-	l.SetLevel(logrus.ErrorLevel)
 
 	srv := rtmp.NewServer(&rtmp.ServerConfig{
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
@@ -43,28 +39,31 @@ func NewRTMPServer(service services.Service, orch *orchestrator.Connection) {
 				Handler: &ConnHandler{
 					orch:    orch,
 					service: service,
+					log:     log,
 				},
 
 				ControlState: rtmp.StreamControlStateConfig{
 					DefaultBandwidthWindowSize: 6 * 1024 * 1024 / 8,
 				},
-				Logger: l,
 			}
 		},
 	})
 	if err := srv.Serve(listener); err != nil {
-		log.Panicf("Failed: %+v", err)
+		log.Fatal(err)
 	}
 }
 
 type ConnHandler struct {
 	rtmp.DefaultHandler
-	orch    *orchestrator.Connection
+	orch    *orchestrator.Client
 	service services.Service
 
-	channelID uint32
-	streamID  uint32
-	streamKey []byte
+	log logrus.FieldLogger
+
+	channelID     uint32
+	streamID      uint32
+	streamKey     []byte
+	authenticated bool
 
 	//mediaConn net.Conn
 	rtpWriter io.Writer
@@ -73,12 +72,20 @@ type ConnHandler struct {
 	packetizer rtp.Packetizer
 	clockRate  uint32
 
-	//sps []byte
-	//pps []byte
+	videoPackets     int
+	lastVideoPackets int
+
+	lastKeyFrames   int
+	lastInterFrames int
+
+	sps []byte
+	pps []byte
+
+	quitTimer chan bool
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
-	log.Printf("OnServe: %#v", conn)
+	h.log.Info("OnServe: %#v", conn)
 	h.clockRate = 90000
 
 	h.sequencer = rtp.NewRandomSequencer()
@@ -86,17 +93,18 @@ func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
 }
 
 func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) (err error) {
-	log.Printf("OnConnect: %#v", cmd)
+	h.log.Info("OnConnect: %#v", cmd)
+
 	return nil
 }
 
 func (h *ConnHandler) OnCreateStream(timestamp uint32, cmd *rtmpmsg.NetConnectionCreateStream) error {
-	log.Printf("OnCreateStream: %#v", cmd)
+	h.log.Info("OnCreateStream: %#v", cmd)
 	return nil
 }
 
 func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish) (err error) {
-	log.Printf("OnPublish: %#v", cmd)
+	h.log.Info("OnPublish: %#v", cmd)
 
 	if cmd.PublishingName == "" {
 		return errors.New("PublishingName is empty")
@@ -126,9 +134,9 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	}
 
 	h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
-		Context:        1,
-		ChannelID:      h.channelID,
-		StreamID:       h.streamID,
+		Context:   1,
+		ChannelID: h.channelID,
+		StreamID:  h.streamID,
 	})
 
 	err = streamManager.AddStream(h)
@@ -136,17 +144,56 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 		return err
 	}
 
+	// Add some meta info to the logger
+	h.log = h.log.WithFields(logrus.Fields{
+		"channel_id": h.channelID,
+		"stream_id":  h.streamID,
+	})
+
+	h.authenticated = true
+
+	ticker := time.NewTicker(5 * time.Second)
+	h.quitTimer = make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				h.log.WithFields(logrus.Fields{
+					"keyframes": h.lastKeyFrames,
+					"interframes": h.lastInterFrames,
+					"packets": h.videoPackets-h.lastVideoPackets,
+				}).Debug("Processed 5s of input frames from RTMP input")
+				//h.log.Debugf("Processed %d video packets in the last 5 seconds (%d packets/sec)", h.videoPackets-h.lastVideoPackets, (h.videoPackets-h.lastVideoPackets)/5)
+				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
+
+				h.lastVideoPackets = h.videoPackets
+				h.lastKeyFrames = 0
+				h.lastInterFrames = 0
+			case <-h.quitTimer:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
+
 	return nil
 }
 
 func (h *ConnHandler) OnClose() {
-	log.Printf("OnClose")
+	h.log.Info("OnClose")
+
+	h.quitTimer <- true
+
+	// if !h.authenticated {
+	// 	// We never published anything to end
+	// 	return
+	// }
 
 	// Tell the orchestrator the stream has ended
 	h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
-		Context:        0,
-		ChannelID:      h.channelID,
-		StreamID:       h.streamID,
+		Context:   0,
+		ChannelID: h.channelID,
+		StreamID:  h.streamID,
 	})
 
 	// Tell the service the stream has ended
@@ -199,8 +246,8 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 
 const (
 	headerLengthField = 4
-	//spsId             = 0x67
-	//ppsId             = 0x68
+	spsId             = 0x67
+	ppsId             = 0x68
 )
 
 func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
@@ -214,14 +261,64 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 		return err
 	}
 
+	// video.CodecID == H264, I wonder if we should check this?
+	// video.FrameType does not seem to contain b-frames even if they exist
+
+	switch video.FrameType {
+	case flvtag.FrameTypeKeyFrame:
+		h.lastKeyFrames += 1
+	case flvtag.FrameTypeInterFrame:
+		h.lastInterFrames += 1
+	default:
+		h.log.Debug("Unknown FLV Video Frame: %+v\n", video)
+	}
+
 	data := new(bytes.Buffer)
 	if _, err := io.Copy(data, video.Data); err != nil {
 		return err
 	}
 
 	// From: https://github.com/Sean-Der/rtmp-to-webrtc/blob/master/rtmp.go#L110-L123
+	// For example, you want to store a H.264 file and decode it on another computer. The decoder has no idea on how
+	// to search the boundaries of the NAL units. So, a three-byte or four-byte start code, 0x000001 or 0x00000001,
+	// is added at the beginning of each NAL unit. They are called Byte-Stream Format. Hence, the decoder can now
+	// identify the boundaries easily.
+	// Source: https://yumichan.net/video-processing/video-compression/introduction-to-h264-nal-unit/
+
+	outBuf := h.appendNALHeader(video, data.Bytes())
+	// outBuf := h.appendNALHeaderSpecial(video, data.Bytes())
+
+	// Likely there's more than one set of RTP packets in this read
+	samples := uint32(len(outBuf)) + h.clockRate
+	packets := h.packetizer.Packetize(outBuf, samples)
+
+	h.videoPackets += len(packets)
+
+	// So the video is jittering, especially on screens with no movement.
+	// To reproduce, play clock scene, see it working, and then switch to desktop scene
+	// You can see in the chrome inspector that the keyframes decoded drops. You can also see the weird video problems
+	// happen on the clock scene, which show up in the keyframe decoded drops.
+	// I want to log the keyframes tomorrow to see if we stop getting them on the ingest side.
+	// Also there's some bullshit in Janus to look at
+
+	for _, p := range packets {
+		p.PayloadType = 96
+		p.SSRC = h.channelID + 1
+		buf, err := p.Marshal()
+		if err != nil {
+			return err
+		}
+
+		if _, err = h.rtpWriter.Write(buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (h *ConnHandler) appendNALHeader(video flvtag.VideoData, videoBuffer []byte) []byte {
 	var outBuf []byte
-	videoBuffer := data.Bytes()
 	for offset := 0; offset < len(videoBuffer); {
 		bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
 		if offset+bufferLength >= len(videoBuffer) {
@@ -234,29 +331,93 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 
 		offset += bufferLength
 	}
+	return outBuf
+}
+func (h *ConnHandler) appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) []byte {
+	hasSpsPps := false
+	var outBuf []byte
 
-	// Likely there's more than one set of RTP packets in this read
-	samples := uint32(len(outBuf)) + h.clockRate
-	packets := h.packetizer.Packetize(outBuf, samples)
+	if video.AVCPacketType == flvtag.AVCPacketTypeNALU {
+		for offset := 0; offset < len(videoBuffer); {
 
-	for _, p := range packets {
-		p.PayloadType = 96
-		p.SSRC = h.channelID + 1
-		buf, err := p.Marshal()
-		if err != nil {
-			return err
+			bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
+			if offset+bufferLength >= len(videoBuffer) {
+				break
+			}
+
+			offset += headerLengthField
+
+			if videoBuffer[offset] == spsId {
+				hasSpsPps = true
+				h.sps = append(annexBPrefix(), videoBuffer[offset:offset+bufferLength]...)
+			} else if videoBuffer[offset] == ppsId {
+				hasSpsPps = true
+				h.pps = append(annexBPrefix(), videoBuffer[offset:offset+bufferLength]...)
+			}
+
+			outBuf = append(outBuf, annexBPrefix()...)
+			outBuf = append(outBuf, videoBuffer[offset:offset+bufferLength]...)
+
+			offset += bufferLength
 		}
-		if _, err = h.rtpWriter.Write(buf); err != nil {
-			return err
+	} else if video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader {
+		const spsCountOffset = 5
+		spsCount := videoBuffer[spsCountOffset] & 0x1F
+		offset := 6
+		h.sps = []byte{}
+		for i := 0; i < int(spsCount); i++ {
+			spsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
+			offset += 2
+			if videoBuffer[offset] != spsId {
+				// panic("Failed to parse SPS")
+				return []byte{}
+			}
+			h.sps = append(h.sps, annexBPrefix()...)
+			h.sps = append(h.sps, videoBuffer[offset:offset+int(spsLen)]...)
+			offset += int(spsLen)
 		}
+		ppsCount := videoBuffer[offset]
+		offset++
+		for i := 0; i < int(ppsCount); i++ {
+			ppsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
+			offset += 2
+			if videoBuffer[offset] != ppsId {
+				// panic("Failed to parse PPS")
+				return []byte{}
+			}
+			h.sps = append(h.sps, annexBPrefix()...)
+			h.sps = append(h.sps, videoBuffer[offset:offset+int(ppsLen)]...)
+			offset += int(ppsLen)
+		}
+		return nil
 	}
 
-	return nil
+	// We have an unadorned keyframe, append SPS/PPS
+	if video.FrameType == flvtag.FrameTypeKeyFrame && !hasSpsPps {
+		outBuf = append(append(h.sps, h.pps...), outBuf...)
+	}
+
+	return outBuf
 }
 
-//func annexBPrefix() []byte {
-//	return []byte{0x00, 0x00, 0x00, 0x01}
-//}
+func isKeyFrame(data []byte) bool {
+	const typeSTAPA = 24
+
+	var word uint32
+
+	payload := bytes.NewReader(data)
+	err := binary.Read(payload, binary.BigEndian, &word)
+
+	if err != nil || (word&0x1F000000)>>24 != typeSTAPA {
+		return false
+	}
+
+	return word&0x1F == 7
+}
+
+func annexBPrefix() []byte {
+	return []byte{0x00, 0x00, 0x00, 0x01}
+}
 
 // Other OnVideo implementation, not sure what the byte manipulation is doing
 // Lost the source on this one, but I'm pretty sure it's Sean-Der on GitHub

@@ -16,5 +16,6 @@ rtmp-ingest
 # vendor/
 
 .idea/
+.vscode/
 rtmp-ingest.iml
 stunnel/

@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"encoding/binary"
-	"log"
 )
 
 // Message Types
@@ -19,6 +18,7 @@ const (
 )
 
 
+// IntroMessage Sent on connect with identifying information.
 type IntroMessage struct {
 	VersionMajor    uint8
 	VersionMinor    uint8
@@ -43,7 +43,20 @@ func (im *IntroMessage) Encode() []byte {
 
 	return buf
 }
+func DecodeIntroMessage(buf []byte) IntroMessage {
+	regionEnd := 6 + binary.LittleEndian.Uint16(buf[4:6])
 
+	return IntroMessage{
+		VersionMajor:    buf[0],
+		VersionMinor:    buf[1],
+		VersionRevision: buf[2],
+		RelayLayer:      buf[3],
+		RegionCode:      string(buf[6:regionEnd]),
+		Hostname:        string(buf[regionEnd:]),
+	}
+}
+
+// OutroMessage Sent on disconnect with information on the reason for disconnect.
 type OutroMessage struct {
 	Reason string
 }
@@ -54,7 +67,11 @@ func (im *OutroMessage) Encode() []byte {
 
 	return buf
 }
+func DecodeOutroMessage(buf []byte) OutroMessage {
+	return OutroMessage{}
+}
 
+// NodeStateMessage Sent periodically by nodes to indicate their current state.
 type NodeStateMessage struct {
 	CurrentLoad uint32
 	MaximumLoad uint32
@@ -72,7 +89,11 @@ func (im *NodeStateMessage) Encode() []byte {
 
 	return buf
 }
+func DecodeNodeStateMessage(buf []byte) NodeStateMessage {
+	return NodeStateMessage{}
+}
 
+// ChannelSubscriptionMessage Indicates whether streams for a given channel should be relayed to this node.
 type ChannelSubscriptionMessage struct {
 	Context   uint8
 	ChannelID uint32
@@ -90,7 +111,11 @@ func (im *ChannelSubscriptionMessage) Encode() []byte {
 
 	return buf
 }
+func DecodeChannelSubscriptionMessage(buf []byte) ChannelSubscriptionMessage {
+	return ChannelSubscriptionMessage{}
+}
 
+// StreamPublishingMessage Indicates that a new stream is now available (or unavailable) from this connection.
 type StreamPublishingMessage struct {
 	Context   uint8
 	ChannelID uint32
@@ -110,17 +135,18 @@ func (im *StreamPublishingMessage) Encode() []byte {
 
 	return buf
 }
-func DecodeStreamPublishingMessage(buf []byte) *StreamPublishingMessage {
+func DecodeStreamPublishingMessage(buf []byte) StreamPublishingMessage {
 	channelId := 6 + binary.LittleEndian.Uint32(buf[4:8])
 	streamId := 6 + binary.LittleEndian.Uint32(buf[8:12])
 
-	return &StreamPublishingMessage{
+	return StreamPublishingMessage{
 		Context:    buf[0],
 		ChannelID:    channelId,
 		StreamID: streamId,
 	}
 }
 
+// StreamRelayingMessage Contains information used for relaying streams between nodes.
 type StreamRelayingMessage struct {
 	Context        uint8
 	ChannelID      uint32
@@ -147,13 +173,12 @@ func (im *StreamRelayingMessage) Encode() []byte {
 
 	return buf
 }
-func DecodeStreamRelayingMessage(buf []byte) *StreamRelayingMessage {
+func DecodeStreamRelayingMessage(buf []byte) StreamRelayingMessage {
 	channelId := binary.LittleEndian.Uint32(buf[1:5])
 	streamId := binary.LittleEndian.Uint32(buf[5:9])
 	hostnameEnd := 11 + binary.LittleEndian.Uint16(buf[9:11])
-	log.Printf("Channel %d Stream %d Hostname End %d\n", channelId, streamId, hostnameEnd)
 
-	return &StreamRelayingMessage{
+	return StreamRelayingMessage{
 		Context:    buf[0],
 		ChannelID:    channelId,
 		StreamID: streamId,
@@ -162,19 +187,13 @@ func DecodeStreamRelayingMessage(buf []byte) *StreamRelayingMessage {
 	}
 }
 
-func DecodeIntroMessage(buf []byte) *IntroMessage {
-	regionEnd := 6 + binary.LittleEndian.Uint16(buf[4:6])
 
-	return &IntroMessage{
-		VersionMajor:    buf[0],
-		VersionMinor:    buf[1],
-		VersionRevision: buf[2],
-		RelayLayer:      buf[3],
-		RegionCode:      string(buf[6:regionEnd]),
-		Hostname:        string(buf[regionEnd:]),
-	}
-}
 
+// MessageHeader
+// |-                       32 bit / 4 byte                       -|
+// +---------------------------------------------------------------+
+// |  Msg Desc (8)  |   Msg Id (8)   |     Payload Length (16)     |
+// +---------------------------------------------------------------+
 type MessageHeader struct {
 	// Request Serializes from Request / Response
 	Request bool
@@ -184,19 +203,6 @@ type MessageHeader struct {
 	ID            uint8
 	PayloadLength uint16
 }
-
-func DecodeMessageHeader(buf []byte) *MessageHeader {
-	payloadLength := binary.LittleEndian.Uint16(buf[2:4])
-
-	return &MessageHeader{
-		Request:       (buf[0] & 0b10000000) == 0,
-		Success:       (buf[0] & 0b01000000) == 0,
-		Type:          buf[0] & 0b00111111,
-		ID:            buf[1],
-		PayloadLength: payloadLength,
-	}
-}
-
 func (msg MessageHeader) Encode() []byte {
 	var headerBytes []byte
 
@@ -216,4 +222,15 @@ func (msg MessageHeader) Encode() []byte {
 	headerBytes = append(headerBytes, payloadLength...)
 
 	return headerBytes
+}
+func DecodeMessageHeader(buf []byte) *MessageHeader {
+	payloadLength := binary.LittleEndian.Uint16(buf[2:4])
+
+	return &MessageHeader{
+		Request:       (buf[0] & 0b10000000) == 0,
+		Success:       (buf[0] & 0b01000000) == 0,
+		Type:          buf[0] & 0b00111111,
+		ID:            buf[1],
+		PayloadLength: payloadLength,
+	}
 }

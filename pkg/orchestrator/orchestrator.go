@@ -5,61 +5,99 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
-	"log"
 	"net"
+
+	"github.com/sirupsen/logrus"
 )
 
-type Connection struct {
-	Connected     bool
+type Client struct {
+	config    *Config
+	logger    logrus.FieldLogger
+	callbacks Callbacks
+
+	connected     bool
 	transport     net.Conn
 	lastMessageID uint8
-
-	OnChannelSubscription func(message ChannelSubscriptionMessage)
-	OnStreamRelaying func(message StreamRelayingMessage)
 }
 
-func (conn *Connection) Connect(address string, regionCode string, hostname string) error {
-	transport, err := net.Dial("tcp", address)
-	if err != nil {
-		return err
+type Callbacks struct {
+	OnIntro               func(message IntroMessage)
+	OnOutro               func(message OutroMessage)
+	OnNodeState           func(message NodeStateMessage)
+	OnChannelSubscription func(message ChannelSubscriptionMessage)
+	OnStreamPublishing    func(message StreamPublishingMessage)
+	OnStreamRelaying      func(message StreamRelayingMessage)
+}
+
+type Config struct {
+	// Address of the remote orchestrator ip:port format
+	Address string
+	// RegionCode we are representing
+	RegionCode string
+	// Hostname for ourselves, so edges know how to reach us
+	Hostname string
+	// Logger for orchestrator client messages
+	Logger logrus.FieldLogger
+	// Handler for callbacks
+	Callbacks Callbacks
+}
+
+func NewClient(config *Config) *Client {
+	return &Client{
+		config: config,
+	}
+}
+
+func (client *Client) Connect(transport net.Conn) error {
+	client.transport = transport
+	client.lastMessageID = 1
+	client.connected = true
+
+	if client.config.Logger != nil {
+		client.logger = client.config.Logger
+	} else {
+		client.logger = logrus.New()
 	}
 
-	conn.transport = transport
-	conn.Connected = true
-	conn.lastMessageID = 1
+	client.callbacks = client.config.Callbacks
 
-	conn.SendIntro(IntroMessage{
+	err := client.SendIntro(IntroMessage{
 		VersionMajor:    0,
 		VersionMinor:    0,
 		VersionRevision: 0,
 		RelayLayer:      0,
-		RegionCode:      regionCode,
-		Hostname:        hostname,
+		RegionCode:      client.config.RegionCode,
+		Hostname:        client.config.RegionCode,
 	})
+	if err != nil {
+		client.connected = false
+		return err
+	}
 
-	go conn.eternalRead()
+	go client.eternalRead()
 	return nil
 }
 
-func (conn *Connection) eternalRead() {
+func (client *Client) eternalRead() {
 	// I think this has to do something funky
 	// https://github.com/Glimesh/janus-ftl-orchestrator/blob/974b55956094d1e1d29e060c8fb056d522a3d153/inc/FtlConnection.h
 
-	scanner := bufio.NewScanner(conn.transport)
+	scanner := bufio.NewScanner(client.transport)
 	scanner.Split(splitOrchestratorMessages)
 	for scanner.Scan() {
-		log.Println("Orchestrator Scan")
+		if !client.connected {
+			return
+		}
 
 		// ready to go header + message
 		buf := scanner.Bytes()
 
-		//log.Printf("Receiving Orchestrator: %v\n", buf)
-		log.Printf("Receiving Orchestrator Hex: %s\n", insertNth(hex.EncodeToString(buf), 2))
+		client.logger.Debugf("Receiving Orchestrator Hex: %s", insertNth(hex.EncodeToString(buf), 2))
 
-		conn.parseMessage(buf)
+		client.parseMessage(buf)
 	}
 	if err := scanner.Err(); err != nil {
-		log.Println("Error decoding Orchestrator input:", err)
+		client.logger.Error("Error decoding Orchestrator input:", err)
 	}
 }
 
@@ -70,7 +108,6 @@ func splitOrchestratorMessages(data []byte, atEOF bool) (advance int, token []by
 	}
 
 	if len(data) >= 4 {
-		//log.Printf("Receiving Raw Hex: %s\n", insertNth(hex.EncodeToString(data), 2))
 		messageHeader := DecodeMessageHeader(data)
 		messageSize := int(messageHeader.PayloadLength) + 4
 		return messageSize, data[0:messageSize], nil
@@ -84,60 +121,65 @@ func splitOrchestratorMessages(data []byte, atEOF bool) (advance int, token []by
 	return
 }
 
-
-func (conn *Connection) Close() {
-	conn.SendOutro(OutroMessage{Reason: "Going away"})
-
-	if err := conn.transport.Close(); err != nil {
-		panic(err)
+func (client *Client) Close() error {
+	if !client.connected {
+		// Already closed
+		return nil
 	}
-	conn.Connected = false
+
+	// Both of these can error, but we're trying to close the connection anyway
+	client.SendOutro(OutroMessage{Reason: "Going away"})
+	client.transport.Close()
+
+	client.connected = false
+	return nil
 }
 
-func (conn *Connection) parseMessage(raw []byte)  {
+func (client *Client) parseMessage(raw []byte) {
 	messageHeader := DecodeMessageHeader(raw)
-	message := raw[4:4+int(messageHeader.PayloadLength)]
+	message := raw[4 : 4+int(messageHeader.PayloadLength)]
 
-	conn.handleMessage(*messageHeader, message)
+	client.handleMessage(*messageHeader, message)
 }
 
-func (conn *Connection) handleMessage(header MessageHeader, payload []byte) {
-	log.Printf("parseMessage: %+v\n", header)
-
+func (client *Client) handleMessage(header MessageHeader, payload []byte) {
 	if !header.Request {
 		// We don't need to bother decoding
-		// Responses are meaningless
+		// Responses are meaningless, unless maybe we need them as a confirmation?
 		return
 	}
 
+	client.logger.Debugf("Got message from Orchestrator: %v", header)
 	switch header.Type {
 	case TypeIntro:
-		log.Println("RECV TypeIntro")
-		//something := DecodeIntroMessage(payload)
-		//fmt.Printf("Decoded: %v\n", something)
+		if client.callbacks.OnIntro != nil {
+			client.callbacks.OnIntro(DecodeIntroMessage(payload))
+		}
 	case TypeOutro:
-		log.Println("RECV TypeOutro")
+		if client.callbacks.OnOutro != nil {
+			client.callbacks.OnOutro(DecodeOutroMessage(payload))
+		}
 	case TypeNodeState:
-		log.Println("RECV TypeNodeState")
+		if client.callbacks.OnNodeState != nil {
+			client.callbacks.OnNodeState(DecodeNodeStateMessage(payload))
+		}
 	case TypeChannelSubscription:
-		log.Println("RECV TypeChannelSubscription")
-		//if conn.OnChannelSubscription != nil {
-			// conn.OnChannelSubscription
-		//}
+		if client.callbacks.OnChannelSubscription != nil {
+			client.callbacks.OnChannelSubscription(DecodeChannelSubscriptionMessage(payload))
+		}
 	case TypeStreamPublishing:
-		log.Println("RECV TypeStreamPublishing")
-		//something := DecodeStreamPublishingMessage(payload)
-		//fmt.Printf("Decoded: %v\n", something)
+		if client.callbacks.OnStreamPublishing != nil {
+			client.callbacks.OnStreamPublishing(DecodeStreamPublishingMessage(payload))
+		}
 	case TypeStreamRelaying:
-		log.Println("RECV TypeStreamRelaying")
-		if conn.OnStreamRelaying != nil {
-			conn.OnStreamRelaying(*DecodeStreamRelayingMessage(payload))
+		if client.callbacks.OnStreamRelaying != nil {
+			client.callbacks.OnStreamRelaying(DecodeStreamRelayingMessage(payload))
 		}
 	}
 }
 
-func (conn *Connection) SendMessage(messageType uint8, payload []byte) error {
-	if !conn.Connected {
+func (client *Client) SendMessage(messageType uint8, payload []byte) error {
+	if !client.connected {
 		return errors.New("orchestrator connection is closed")
 	}
 
@@ -146,21 +188,19 @@ func (conn *Connection) SendMessage(messageType uint8, payload []byte) error {
 		Request:       true,
 		Success:       true,
 		Type:          messageType,
-		ID:            conn.lastMessageID,
+		ID:            client.lastMessageID,
 		PayloadLength: uint16(len(payload)),
 	}
 	messageBuffer := message.Encode()
 	messageBuffer = append(messageBuffer, payload...)
 
-	log.Printf("Sending Orchestrator: %v\n", messageBuffer)
-	log.Printf("Sending Orchestrator Hex: %s\n", insertNth(hex.EncodeToString(messageBuffer), 2))
-	_, err := conn.transport.Write(messageBuffer)
+	client.logger.Debugf("Sending Orchestrator Hex: %s", insertNth(hex.EncodeToString(messageBuffer), 2))
+	_, err := client.transport.Write(messageBuffer)
 	if err != nil {
-		panic(err)
 		return err
 	}
 
-	conn.lastMessageID = conn.lastMessageID + 1
+	client.lastMessageID = client.lastMessageID + 1
 
 	return nil
 }
@@ -178,21 +218,21 @@ func insertNth(s string, n int) string {
 	return buffer.String()
 }
 
-func (conn Connection) SendIntro(message IntroMessage) {
-	conn.SendMessage(TypeIntro, message.Encode())
+func (client Client) SendIntro(message IntroMessage) error {
+	return client.SendMessage(TypeIntro, message.Encode())
 }
-func (conn Connection) SendOutro(message OutroMessage) {
-	conn.SendMessage(TypeOutro, message.Encode())
+func (client Client) SendOutro(message OutroMessage) error {
+	return client.SendMessage(TypeOutro, message.Encode())
 }
-func (conn Connection) SendNodeState(message NodeStateMessage) {
-	conn.SendMessage(TypeNodeState, message.Encode())
+func (client Client) SendNodeState(message NodeStateMessage) error {
+	return client.SendMessage(TypeNodeState, message.Encode())
 }
-func (conn Connection) SendChannelSubscription(message ChannelSubscriptionMessage) {
-	conn.SendMessage(TypeChannelSubscription, message.Encode())
+func (client Client) SendChannelSubscription(message ChannelSubscriptionMessage) error {
+	return client.SendMessage(TypeChannelSubscription, message.Encode())
 }
-func (conn Connection) SendStreamPublishing(message StreamPublishingMessage) {
-	conn.SendMessage(TypeStreamPublishing, message.Encode())
+func (client Client) SendStreamPublishing(message StreamPublishingMessage) error {
+	return client.SendMessage(TypeStreamPublishing, message.Encode())
 }
-func (conn Connection) SendStreamRelaying(message StreamRelayingMessage) {
-	conn.SendMessage(TypeStreamRelaying, message.Encode())
+func (client Client) SendStreamRelaying(message StreamRelayingMessage) error {
+	return client.SendMessage(TypeStreamRelaying, message.Encode())
 }
