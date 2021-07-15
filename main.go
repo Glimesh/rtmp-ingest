@@ -69,7 +69,7 @@ func main() {
 						return
 					}
 
-					mediaAddr := fmt.Sprintf("%d:%d", message.TargetHostname, client.AssignedMediaPort)
+					mediaAddr := fmt.Sprintf("%s:%d", message.TargetHostname, client.AssignedMediaPort)
 					mediaConn, err := net.Dial("udp", mediaAddr)
 					if err != nil {
 						log.WithField("channel_id", message.ChannelID).Error(err)

@@ -149,7 +149,7 @@ func (client *Client) handleMessage(header MessageHeader, payload []byte) {
 		return
 	}
 
-	client.logger.Debugf("Got message from Orchestrator: %v", header)
+	client.logger.Debugf("Got message from Orchestrator: %#v", header)
 	switch header.Type {
 	case TypeIntro:
 		if client.callbacks.OnIntro != nil {

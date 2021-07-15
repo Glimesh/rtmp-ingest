@@ -285,8 +285,8 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// identify the boundaries easily.
 	// Source: https://yumichan.net/video-processing/video-compression/introduction-to-h264-nal-unit/
 
-	outBuf := h.appendNALHeader(video, data.Bytes())
-	// outBuf := h.appendNALHeaderSpecial(video, data.Bytes())
+	//outBuf := h.appendNALHeader(video, data.Bytes())
+	outBuf := h.appendNALHeaderSpecial(video, data.Bytes())
 
 	// Likely there's more than one set of RTP packets in this read
 	samples := uint32(len(outBuf)) + h.clockRate
