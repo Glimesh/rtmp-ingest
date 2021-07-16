@@ -5,7 +5,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -13,14 +15,18 @@ import (
 )
 
 type Conn struct {
-	Connected         bool
 	AssignedMediaPort int
 
-	controlConn    net.Conn
-	controlScanner *bufio.Scanner
-	mediaConn      net.Conn
+	channelId uint32
 
-	quitTimer chan bool
+	controlConn      net.Conn
+	controlConnected bool
+	controlScanner   *bufio.Reader
+	mediaConn        net.Conn
+
+	lastPing         time.Time
+	failedHeartbeats int
+	quitTimer        chan bool
 }
 
 func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err error) {
@@ -29,27 +35,60 @@ func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err erro
 		return &Conn{}, err
 	}
 
-	scanner := bufio.NewScanner(tcpConn)
-	conn = &Conn{controlConn: tcpConn, controlScanner: scanner, mediaConn: nil}
+	scanner := bufio.NewReader(tcpConn)
+	conn = &Conn{
+		controlConn:    tcpConn,
+		controlScanner: scanner,
+		mediaConn:      nil,
+		channelId:      channelID,
+		quitTimer:      make(chan bool, 1),
+	}
 
-	err = conn.authenticateControlConnection(channelID, streamKey)
+	if err = conn.sendAuthentication(channelID, streamKey); err != nil {
+		conn.Close()
+		return conn, err
+	}
+	time.Sleep(time.Second)
+	if err = conn.sendMetadataBatch(); err != nil {
+		conn.Close()
+		return conn, err
+	}
+	time.Sleep(time.Second)
+	if err = conn.sendMediaStart(); err != nil {
+		conn.Close()
+		return conn, err
+	}
+
+	// After we're finally connected, make sure we stay alive
+	go conn.heartbeat()
 
 	return conn, err
 }
 
+//func (conn *Conn) eternalRead() {
+//	var buf [1024]byte
+//	for {
+//		n, err := conn.controlConn.Read(buf[0:])
+//		if err != nil {
+//
+//		}
+//	}
+//}
+
 func (conn *Conn) Close() {
-	conn.Connected = false
+	conn.controlConnected = false
 	conn.quitTimer <- true
+
+	conn.sendControlMessage(requestDisconnect, false)
 	conn.controlConn.Close()
 }
 
-func (conn *Conn) authenticateControlConnection(channelID uint32, streamKey []byte) error {
-	var err error
-
-	conn.sendControlMessage(requestHmac)
-
-	msg := conn.readControlMessage()
-	split := strings.Split(msg, " ")
+func (conn *Conn) sendAuthentication(channelID uint32, streamKey []byte) (err error) {
+	resp, err := conn.sendControlMessage(requestHmac, true)
+	if err != nil {
+		return err
+	}
+	split := strings.Split(resp, " ")
 
 	hmacHexString := split[1]
 	decoded, err := hex.DecodeString(hmacHexString)
@@ -62,62 +101,76 @@ func (conn *Conn) authenticateControlConnection(channelID uint32, streamKey []by
 
 	hmacPayload := hash.Sum(nil)
 
-	conn.sendControlMessage(fmt.Sprintf(requestConnect, channelID, hex.EncodeToString(hmacPayload)))
-	conn.readControlMessage()
+	resp, err = conn.sendControlMessage(fmt.Sprintf(requestConnect, channelID, hex.EncodeToString(hmacPayload)), true)
+	if err := checkFtlResponse(resp, err, responseOk); err != nil {
+		return err
+	}
 
+	return nil
+}
+
+func (conn *Conn) sendMetadataBatch() error {
 	// fake for now
 	attrs := []string{
-		//"ProtocolVersion: 0.9",
-		"VendorName: rtmp-ingest",
-		"VendorVersion: 1.0",
-		"Video: true",
-		"VideoCodec: H264",
-		"VideoHeight: 720",
-		"VideoWidth: 1280",
-		"VideoPayloadType: 96",
-		fmt.Sprintf(metaVideoIngestSSRC, channelID+1),
-		"Audio: true",
-		"AudioCodec: OPUS",
-		"AudioPayloadType: 97",
-		fmt.Sprintf(metaAudioIngestSSRC, channelID),
+		// Generic
+		fmt.Sprintf(metaProtocolVersion, VersionMajor, VersionMinor),
+		fmt.Sprintf(metaVendorName, "rtmp-ingest"),
+		fmt.Sprintf(metaVendorVersion, "1.0"),
+		// Video
+		fmt.Sprintf(metaVideo, "true"),
+		fmt.Sprintf(metaVideoCodec, "H264"),
+		fmt.Sprintf(metaVideoHeight, 720),
+		fmt.Sprintf(metaVideoWidth, 1280),
+		fmt.Sprintf(metaVideoPayloadType, 96),
+		fmt.Sprintf(metaVideoIngestSSRC, conn.channelId+1),
+		// Audio
+		fmt.Sprintf(metaAudio, "true"),
+		fmt.Sprintf(metaAudioCodec, "OPUS"), // This is a lie, its AAC
+		fmt.Sprintf(metaAudioPayloadType, 97),
+		fmt.Sprintf(metaAudioIngestSSRC, conn.channelId),
 	}
 	for _, v := range attrs {
-		conn.sendControlMessage(v)
+		_, err := conn.sendControlMessage(v, false)
+		if err != nil {
+			return err
+		}
 	}
 
-	conn.sendControlMessage(requestDot)
+	return nil
+}
 
-	resp := conn.readControlMessage()
+func (conn *Conn) sendMediaStart() (err error) {
+	resp, err := conn.sendControlMessage(requestDot, true)
+	if err != nil {
+		return err
+	}
+
 	matches := clientMediaPortRegex.FindAllStringSubmatch(resp, 1)
 	if len(matches) < 1 {
-		conn.Close()
 		return err
 	}
 	conn.AssignedMediaPort, err = strconv.Atoi(matches[0][1])
 	if err != nil {
-		conn.Close()
 		return err
 	}
 
-	go conn.heartbeat()
 	return nil
 }
-
 func (conn *Conn) heartbeat() {
-	// Honestly this isn't the best way to do it, we should make command response processing happen async
-	// so state is managed on the connection
-
-	// Currently two commands could go out at the same time and we could get the responses confused
-	// Assuming the server is handling our commands async anyway
 	ticker := time.NewTicker(5 * time.Second)
-	conn.quitTimer = make(chan bool)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
-				conn.sendControlMessage(requestPing)
-				if conn.readControlMessage() != "201" {
-					conn.Close()
+				resp, err := conn.sendControlMessage(requestPing, true)
+				if err := checkFtlResponse(resp, err, responsePong); err != nil {
+					conn.failedHeartbeats += 1
+					if conn.failedHeartbeats >= allowedHeartbeatFailures {
+						conn.Close()
+						return
+					}
+				} else {
+					conn.failedHeartbeats = 0
 				}
 			case <-conn.quitTimer:
 				ticker.Stop()
@@ -127,17 +180,46 @@ func (conn *Conn) heartbeat() {
 	}()
 }
 
-func (conn *Conn) sendControlMessage(message string) error {
+func (conn *Conn) sendControlMessage(message string, needResponse bool) (resp string, err error) {
+	err = conn.writeControlMessage(message)
+	if err != nil {
+		return "", err
+	}
+
+	if needResponse {
+		return conn.readControlMessage()
+	}
+
+	return "", nil
+}
+
+func (conn *Conn) writeControlMessage(message string) error {
 	final := message + "\r\n\r\n"
-	// log.Printf("SEND: %q", final)
+	log.Printf("SEND: %q", final)
 	_, err := conn.controlConn.Write([]byte(final))
 	return err
 }
-func (conn *Conn) readControlMessage() string {
-	for conn.controlScanner.Scan() {
-		recv := conn.controlScanner.Text()
-		// log.Printf("RECV: %q", recv)
-		return recv
+
+// readControlMessage forces a read, and closes the connection if it doesn't get what it wants
+func (conn *Conn) readControlMessage() (string, error) {
+	// Give the server 5 seconds to respond to our read request
+	conn.controlConn.SetReadDeadline(time.Now().Add(time.Second * 5))
+
+	recv, err := conn.controlScanner.ReadString('\n')
+	if err != nil {
+		return "", err
 	}
-	return ""
+
+	log.Printf("RECV: %q", recv)
+	return strings.TrimRight(recv, "\n"), nil
+}
+
+func checkFtlResponse(resp string, err error, expected string) error {
+	if err != nil {
+		return err
+	}
+	if resp != expected {
+		return errors.New("unexpected reply from server: " + resp)
+	}
+	return nil
 }

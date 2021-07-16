@@ -52,7 +52,6 @@ func main() {
 		Callbacks: orchestrator.Callbacks{
 			OnStreamRelaying: func(message orchestrator.StreamRelayingMessage) {
 				// TODO: Where do we put this?
-
 				stream, err := streamManager.GetStream(message.ChannelID)
 				if err != nil {
 					// Do nothing?
@@ -63,9 +62,9 @@ func main() {
 				if message.Context == 1 {
 					// Request to relay
 					ftlAddr := fmt.Sprintf("%s:%d", message.TargetHostname, ftl.DefaultPort)
-					client, err := ftl.Dial(ftlAddr, message.ChannelID, message.StreamKey)
-					if err != nil {
-						log.WithField("channel_id", message.ChannelID).Error(err)
+					client, ftlErr := ftl.Dial(ftlAddr, message.ChannelID, message.StreamKey)
+					if ftlErr != nil {
+						log.WithField("channel_id", message.ChannelID).Error(ftlErr)
 						return
 					}
 

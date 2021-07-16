@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/pion/rtp/codecs"
 	"io"
 	"net"
 	"strconv"
@@ -13,7 +14,6 @@ import (
 	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
 	"github.com/clone1018/rtmp-ingest/pkg/services"
 	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
 	"github.com/sirupsen/logrus"
 	flvtag "github.com/yutopp/go-flv/tag"
 	"github.com/yutopp/go-rtmp"
@@ -37,14 +37,16 @@ func NewRTMPServer(service services.Service, orch *orchestrator.Client, log logr
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
 			return conn, &rtmp.ConnConfig{
 				Handler: &ConnHandler{
-					orch:    orch,
-					service: service,
-					log:     log,
+					orch:      orch,
+					service:   service,
+					log:       log,
+					quitTimer: make(chan bool, 1),
 				},
 
 				ControlState: rtmp.StreamControlStateConfig{
 					DefaultBandwidthWindowSize: 6 * 1024 * 1024 / 8,
 				},
+				Logger: log.WithField("app", "yutopp/go-rtmp"),
 			}
 		},
 	})
@@ -68,9 +70,10 @@ type ConnHandler struct {
 	//mediaConn net.Conn
 	rtpWriter io.Writer
 
-	sequencer  rtp.Sequencer
-	packetizer rtp.Packetizer
-	clockRate  uint32
+	sequencer       rtp.Sequencer
+	videoPacketizer rtp.Packetizer
+	audioPacketizer rtp.Packetizer
+	clockRate       uint32
 
 	videoPackets     int
 	lastVideoPackets int
@@ -87,9 +90,6 @@ type ConnHandler struct {
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
 	h.log.Info("OnServe: %#v", conn)
 	h.clockRate = 90000
-
-	h.sequencer = rtp.NewRandomSequencer()
-	h.packetizer = rtp.NewPacketizer(1392, 0, 0, &codecs.H264Payloader{}, h.sequencer, h.clockRate)
 }
 
 func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) (err error) {
@@ -133,11 +133,14 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 		return err
 	}
 
-	h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
+	err = h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
 		Context:   1,
 		ChannelID: h.channelID,
 		StreamID:  h.streamID,
 	})
+	if err != nil {
+		return err
+	}
 
 	err = streamManager.AddStream(h)
 	if err != nil {
@@ -151,17 +154,19 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	})
 
 	h.authenticated = true
+	h.sequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
+	h.videoPacketizer = rtp.NewPacketizer(1392, 96, h.channelID+1, &codecs.H264Payloader{}, h.sequencer, h.clockRate)
+	h.audioPacketizer = rtp.NewPacketizer(1392, 97, h.channelID, &codecs.OpusPayloader{}, h.sequencer, h.clockRate)
 
 	ticker := time.NewTicker(5 * time.Second)
-	h.quitTimer = make(chan bool)
 	go func() {
 		for {
 			select {
 			case <-ticker.C:
 				h.log.WithFields(logrus.Fields{
-					"keyframes": h.lastKeyFrames,
+					"keyframes":   h.lastKeyFrames,
 					"interframes": h.lastInterFrames,
-					"packets": h.videoPackets-h.lastVideoPackets,
+					"packets":     h.videoPackets - h.lastVideoPackets,
 				}).Debug("Processed 5s of input frames from RTMP input")
 				//h.log.Debugf("Processed %d video packets in the last 5 seconds (%d packets/sec)", h.videoPackets-h.lastVideoPackets, (h.videoPackets-h.lastVideoPackets)/5)
 				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
@@ -203,42 +208,39 @@ func (h *ConnHandler) OnClose() {
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
-	// Enabling audio causes janus to *freak out*
-	// I guess because we're sending AAC when its reading Opus :)
 	return nil
 
-	//if h.rtpWriter == nil {
-	//	// Don't need to do anything with this packet since we're not ready to relay it
-	//	return nil
-	//}
-	//
-	//var audio flvtag.AudioData
-	//if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
-	//	return err
-	//}
-	//
-	//data := new(bytes.Buffer)
-	//if _, err := io.Copy(data, audio.Data); err != nil {
-	//	return err
-	//}
-	//outBuf := data.Bytes()
-	//
-	//samples := uint32(len(outBuf)) + h.clockRate
-	//packets := h.packetizer.Packetize(outBuf, samples)
-	//
-	//for _, p := range packets {
-	//	p.PayloadType = 97
-	//	p.SSRC = h.channelID
-	//	buf, err := p.Marshal()
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if _, err = h.rtpWriter.Write(buf); err != nil {
-	//		return err
-	//	}
-	//}
-	//
-	//return nil
+	if h.rtpWriter == nil {
+		// Don't need to do anything with this packet since we're not ready to relay it
+		return nil
+	}
+
+	var audio flvtag.AudioData
+	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
+		return err
+	}
+
+	data := new(bytes.Buffer)
+	if _, err := io.Copy(data, audio.Data); err != nil {
+		return err
+	}
+	outBuf := data.Bytes()
+
+	samples := uint32(len(outBuf)) + h.clockRate
+	// Of course this doesn't fucking work, it's an h264 packetizer
+	packets := h.audioPacketizer.Packetize(outBuf, samples)
+
+	for _, p := range packets {
+		buf, err := p.Marshal()
+		if err != nil {
+			return err
+		}
+		if _, err = h.rtpWriter.Write(buf); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // GStreamer -- AudioData: {SoundFormat:7 SoundRate:0 SoundSize:1 SoundType:0 AACPacketType:0 Data:0x1400022c2a0}
@@ -290,7 +292,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 
 	// Likely there's more than one set of RTP packets in this read
 	samples := uint32(len(outBuf)) + h.clockRate
-	packets := h.packetizer.Packetize(outBuf, samples)
+	packets := h.videoPacketizer.Packetize(outBuf, samples)
 
 	h.videoPackets += len(packets)
 
@@ -301,9 +303,13 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// I want to log the keyframes tomorrow to see if we stop getting them on the ingest side.
 	// Also there's some bullshit in Janus to look at
 
+	// Pion WebRTC also provides a SampleBuilder. This consumes RTP packets and returns samples. It can be used to
+	// re-order and delay for lossy streams. You can see its usage in this example in daf27b.
+	// https://github.com/pion/webrtc/issues/1652
+	// https://github.com/pion/rtsp-bench/blob/master/server/main.go
+	// https://github.com/pion/obs-wormhole/blob/master/internal/rtmp/rtmp.go
+
 	for _, p := range packets {
-		p.PayloadType = 96
-		p.SSRC = h.channelID + 1
 		buf, err := p.Marshal()
 		if err != nil {
 			return err
