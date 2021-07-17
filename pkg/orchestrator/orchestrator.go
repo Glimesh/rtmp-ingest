@@ -200,7 +200,7 @@ func (client *Client) SendMessage(messageType uint8, payload []byte) error {
 		return err
 	}
 
-	client.lastMessageID = client.lastMessageID + 1
+	client.lastMessageID += 1
 
 	return nil
 }

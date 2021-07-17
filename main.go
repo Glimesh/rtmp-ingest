@@ -99,10 +99,8 @@ func main() {
 	}
 	closeHandler(orch)
 
-	go NewRTMPServer(glimeshService, orch, log.WithFields(logrus.Fields{"app": "rtmp"}))
-
-	// Never stop stopping.
-	select {}
+	// Blocking call to start the RTMP server
+	NewRTMPServer(glimeshService, orch, log.WithFields(logrus.Fields{"app": "rtmp"}))
 }
 
 func closeHandler(orch *orchestrator.Client) {
