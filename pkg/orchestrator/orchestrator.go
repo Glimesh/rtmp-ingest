@@ -42,9 +42,9 @@ type Config struct {
 	Callbacks Callbacks
 }
 
-func NewClient(config *Config) *Client {
-	return &Client{
-		config: config,
+func NewClient(config Config) Client {
+	return Client{
+		config: &config,
 	}
 }
 

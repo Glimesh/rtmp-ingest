@@ -1,13 +1,12 @@
 package main
 
 import (
-	"fmt"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"net"
 	"os"
 	"os/signal"
 
 	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/clone1018/rtmp-ingest/pkg/services/glimesh"
 
 	"github.com/sirupsen/logrus"
@@ -39,57 +38,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	streamManager = NewStreamManager()
-
 	orchTransport, err := net.Dial("tcp", os.Getenv("RTMP_INGEST_ORCHESTRATOR_ADDRESS"))
 	if err != nil {
 		log.Fatal(err)
 	}
-	orch := orchestrator.NewClient(&orchestrator.Config{
+	orch := orchestrator.NewClient(orchestrator.Config{
 		RegionCode: "global",
 		Hostname:   hostname,
 		Logger:     log.WithFields(logrus.Fields{"app": "orchestrator"}),
 		Callbacks: orchestrator.Callbacks{
 			OnStreamRelaying: func(message orchestrator.StreamRelayingMessage) {
-				// TODO: Where do we put this?
-				stream, err := streamManager.GetStream(message.ChannelID)
-				if err != nil {
-					// Do nothing?
-					log.WithField("channel_id", message.ChannelID).Error("Channel not found in StreamManager")
-					return
-				}
-
 				if message.Context == 1 {
-					// Request to relay
-					ftlAddr := fmt.Sprintf("%s:%d", message.TargetHostname, ftl.DefaultPort)
-					client, ftlErr := ftl.Dial(ftlAddr, message.ChannelID, message.StreamKey)
-					if ftlErr != nil {
-						log.WithField("channel_id", message.ChannelID).Error(ftlErr)
-						return
-					}
-
-					mediaAddr := fmt.Sprintf("%s:%d", message.TargetHostname, client.AssignedMediaPort)
-					mediaConn, err := net.Dial("udp", mediaAddr)
-					if err != nil {
-						log.WithField("channel_id", message.ChannelID).Error(err)
-						return
-					}
-
-					// Read nothing
-					go func() {
-						buffer := make([]byte, 1024)
-						_, err = mediaConn.Read(buffer)
-						if err != nil {
-							panic(err)
-						}
-					}()
-
-					// setting the rtpWriter is enough to get a stream of packets coming through
-					stream.rtpWriter = mediaConn
+					log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
+					streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
 				} else {
-					// Request to stop relay
-					stream.rtpWriter = nil
-					stream.OnClose()
+					log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
+					streamManager.StopRelay(message.ChannelID, message.TargetHostname)
 				}
 			},
 		},
@@ -99,11 +63,13 @@ func main() {
 	}
 	closeHandler(orch)
 
+	streamManager = NewStreamManager(orch, glimeshService)
+
 	// Blocking call to start the RTMP server
 	NewRTMPServer(glimeshService, orch, log.WithFields(logrus.Fields{"app": "rtmp"}))
 }
 
-func closeHandler(orch *orchestrator.Client) {
+func closeHandler(orch orchestrator.Client) {
 	c := make(chan os.Signal)
 	// Wonder if this should listen to os.Kill as well?
 	signal.Notify(c, os.Interrupt)

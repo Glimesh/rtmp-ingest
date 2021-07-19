@@ -17,7 +17,7 @@ import (
 type Conn struct {
 	AssignedMediaPort int
 
-	channelId uint32
+	channelId ChannelID
 
 	controlConn      net.Conn
 	controlConnected bool
@@ -29,7 +29,7 @@ type Conn struct {
 	quitTimer        chan bool
 }
 
-func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err error) {
+func Dial(addr string, channelID ChannelID, streamKey []byte) (conn *Conn, err error) {
 	tcpConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return &Conn{}, err
@@ -75,15 +75,17 @@ func Dial(addr string, channelID uint32, streamKey []byte) (conn *Conn, err erro
 //	}
 //}
 
-func (conn *Conn) Close() {
+func (conn *Conn) Close() error {
 	conn.controlConnected = false
 	conn.quitTimer <- true
 
 	conn.sendControlMessage(requestDisconnect, false)
 	conn.controlConn.Close()
+
+	return nil
 }
 
-func (conn *Conn) sendAuthentication(channelID uint32, streamKey []byte) (err error) {
+func (conn *Conn) sendAuthentication(channelID ChannelID, streamKey []byte) (err error) {
 	resp, err := conn.sendControlMessage(requestHmac, true)
 	if err != nil {
 		return err

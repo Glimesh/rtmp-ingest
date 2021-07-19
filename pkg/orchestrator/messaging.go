@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/binary"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 )
 
 // Message Types
@@ -17,7 +18,6 @@ const (
 	// 32 - 63 	Reserved 	Reserved for future use
 )
 
-
 // IntroMessage Sent on connect with identifying information.
 type IntroMessage struct {
 	VersionMajor    uint8
@@ -27,6 +27,7 @@ type IntroMessage struct {
 	RegionCode      string
 	Hostname        string
 }
+
 func (im *IntroMessage) Encode() []byte {
 	var buf []byte
 
@@ -60,6 +61,7 @@ func DecodeIntroMessage(buf []byte) IntroMessage {
 type OutroMessage struct {
 	Reason string
 }
+
 func (im *OutroMessage) Encode() []byte {
 	var buf []byte
 
@@ -76,6 +78,7 @@ type NodeStateMessage struct {
 	CurrentLoad uint32
 	MaximumLoad uint32
 }
+
 func (im *NodeStateMessage) Encode() []byte {
 	var buf []byte
 
@@ -96,14 +99,15 @@ func DecodeNodeStateMessage(buf []byte) NodeStateMessage {
 // ChannelSubscriptionMessage Indicates whether streams for a given channel should be relayed to this node.
 type ChannelSubscriptionMessage struct {
 	Context   uint8
-	ChannelID uint32
+	ChannelID ftl.ChannelID
 	StreamKey string
 }
+
 func (im *ChannelSubscriptionMessage) Encode() []byte {
 	var buf []byte
 
 	channelID := make([]byte, 4)
-	binary.LittleEndian.PutUint32(channelID, im.ChannelID)
+	binary.LittleEndian.PutUint32(channelID, uint32(im.ChannelID))
 
 	buf = append(buf, im.Context)
 	buf = append(buf, channelID...)
@@ -118,16 +122,17 @@ func DecodeChannelSubscriptionMessage(buf []byte) ChannelSubscriptionMessage {
 // StreamPublishingMessage Indicates that a new stream is now available (or unavailable) from this connection.
 type StreamPublishingMessage struct {
 	Context   uint8
-	ChannelID uint32
-	StreamID  uint32
+	ChannelID ftl.ChannelID
+	StreamID  ftl.StreamID
 }
+
 func (im *StreamPublishingMessage) Encode() []byte {
 	var buf []byte
 
 	channelID := make([]byte, 4)
-	binary.LittleEndian.PutUint32(channelID, im.ChannelID)
+	binary.LittleEndian.PutUint32(channelID, uint32(im.ChannelID))
 	streamID := make([]byte, 4)
-	binary.LittleEndian.PutUint32(streamID, im.StreamID)
+	binary.LittleEndian.PutUint32(streamID, uint32(im.StreamID))
 
 	buf = append(buf, im.Context)
 	buf = append(buf, channelID...)
@@ -140,27 +145,28 @@ func DecodeStreamPublishingMessage(buf []byte) StreamPublishingMessage {
 	streamId := 6 + binary.LittleEndian.Uint32(buf[8:12])
 
 	return StreamPublishingMessage{
-		Context:    buf[0],
-		ChannelID:    channelId,
-		StreamID: streamId,
+		Context:   buf[0],
+		ChannelID: ftl.ChannelID(channelId),
+		StreamID:  ftl.StreamID(streamId),
 	}
 }
 
 // StreamRelayingMessage Contains information used for relaying streams between nodes.
 type StreamRelayingMessage struct {
 	Context        uint8
-	ChannelID      uint32
-	StreamID       uint32
+	ChannelID      ftl.ChannelID
+	StreamID       ftl.StreamID
 	TargetHostname string
 	StreamKey      []byte
 }
+
 func (im *StreamRelayingMessage) Encode() []byte {
 	var buf []byte
 
 	var channelID []byte
-	binary.LittleEndian.PutUint32(channelID, im.ChannelID)
+	binary.LittleEndian.PutUint32(channelID, uint32(im.ChannelID))
 	var streamID []byte
-	binary.LittleEndian.PutUint32(streamID, im.StreamID)
+	binary.LittleEndian.PutUint32(streamID, uint32(im.StreamID))
 	targetHostnameLength := make([]byte, 2)
 	binary.LittleEndian.PutUint16(targetHostnameLength, uint16(len(im.TargetHostname)))
 
@@ -179,15 +185,13 @@ func DecodeStreamRelayingMessage(buf []byte) StreamRelayingMessage {
 	hostnameEnd := 11 + binary.LittleEndian.Uint16(buf[9:11])
 
 	return StreamRelayingMessage{
-		Context:    buf[0],
-		ChannelID:    channelId,
-		StreamID: streamId,
+		Context:        buf[0],
+		ChannelID:      ftl.ChannelID(channelId),
+		StreamID:       ftl.StreamID(streamId),
 		TargetHostname: string(buf[11:hostnameEnd]),
-		StreamKey: buf[hostnameEnd:],
+		StreamKey:      buf[hostnameEnd:],
 	}
 }
-
-
 
 // MessageHeader
 // |-                       32 bit / 4 byte                       -|
@@ -203,6 +207,7 @@ type MessageHeader struct {
 	ID            uint8
 	PayloadLength uint16
 }
+
 func (msg MessageHeader) Encode() []byte {
 	var headerBytes []byte
 

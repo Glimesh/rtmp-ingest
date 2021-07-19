@@ -8,6 +8,10 @@ var (
 	attributeRegex       = regexp.MustCompile(`(.+): (.+)`)
 )
 
+// Custom Types
+type ChannelID uint32
+type StreamID uint32
+
 const (
 	DefaultPort  = 8084
 	VersionMajor = 0

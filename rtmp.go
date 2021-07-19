@@ -4,23 +4,23 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/clone1018/rtmp-ingest/pkg/services"
+	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
+	"github.com/sirupsen/logrus"
+	flvtag "github.com/yutopp/go-flv/tag"
+	"github.com/yutopp/go-rtmp"
+	rtmpmsg "github.com/yutopp/go-rtmp/message"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
-	"github.com/clone1018/rtmp-ingest/pkg/services"
-	"github.com/pion/rtp"
-	"github.com/sirupsen/logrus"
-	flvtag "github.com/yutopp/go-flv/tag"
-	"github.com/yutopp/go-rtmp"
-	rtmpmsg "github.com/yutopp/go-rtmp/message"
 )
 
-func NewRTMPServer(service services.Service, orch *orchestrator.Client, log logrus.FieldLogger) {
+func NewRTMPServer(service services.Service, orch orchestrator.Client, log logrus.FieldLogger) {
 	log.Info("Starting RTMP Server on :1935")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", ":1935")
@@ -46,7 +46,7 @@ func NewRTMPServer(service services.Service, orch *orchestrator.Client, log logr
 				ControlState: rtmp.StreamControlStateConfig{
 					DefaultBandwidthWindowSize: 6 * 1024 * 1024 / 8,
 				},
-				Logger: log.WithField("app", "yutopp/go-rtmp"),
+				//Logger: log.WithField("app", "yutopp/go-rtmp"),
 			}
 		},
 	})
@@ -57,15 +57,17 @@ func NewRTMPServer(service services.Service, orch *orchestrator.Client, log logr
 
 type ConnHandler struct {
 	rtmp.DefaultHandler
-	orch    *orchestrator.Client
+	orch    orchestrator.Client
 	service services.Service
 
 	log logrus.FieldLogger
 
-	channelID     uint32
-	streamID      uint32
+	channelID     ftl.ChannelID
+	streamID      ftl.StreamID
 	streamKey     []byte
 	authenticated bool
+
+	stream *Stream
 
 	//mediaConn net.Conn
 	rtpWriter io.Writer
@@ -116,36 +118,23 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	if err != nil {
 		return err
 	}
-	h.channelID = uint32(u64)
+	h.channelID = ftl.ChannelID(u64)
 	h.streamKey = []byte(auth[1])
 
-	actualKey, err := h.service.GetHmacKey(h.channelID)
-	if err != nil {
+	if err := streamManager.NewStream(h.channelID); err != nil {
 		return err
 	}
-	if string(h.streamKey) != string(actualKey) {
-		return errors.New("incorrect stream key")
+	if err := streamManager.Authenticate(h.channelID, h.streamKey); err != nil {
+		return err
 	}
 
-	// Authentication passed, start stream
-	h.streamID, err = h.service.StartStream(h.channelID)
+	stream, err := streamManager.StartStream(h.channelID)
 	if err != nil {
 		return err
 	}
 
-	err = h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
-		Context:   1,
-		ChannelID: h.channelID,
-		StreamID:  h.streamID,
-	})
-	if err != nil {
-		return err
-	}
-
-	err = streamManager.AddStream(h)
-	if err != nil {
-		return err
-	}
+	h.stream = stream
+	h.streamID = stream.streamID
 
 	// Add some meta info to the logger
 	h.log = h.log.WithFields(logrus.Fields{
@@ -155,31 +144,10 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 
 	h.authenticated = true
 	h.sequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
-	h.videoPacketizer = rtp.NewPacketizer(1392, 96, h.channelID+1, &codecs.H264Payloader{}, h.sequencer, h.clockRate)
-	h.audioPacketizer = rtp.NewPacketizer(1392, 97, h.channelID, &codecs.OpusPayloader{}, h.sequencer, h.clockRate)
+	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.sequencer, h.clockRate)
+	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.sequencer, h.clockRate)
 
-	ticker := time.NewTicker(5 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				h.log.WithFields(logrus.Fields{
-					"keyframes":   h.lastKeyFrames,
-					"interframes": h.lastInterFrames,
-					"packets":     h.videoPackets - h.lastVideoPackets,
-				}).Debug("Processed 5s of input frames from RTMP input")
-				//h.log.Debugf("Processed %d video packets in the last 5 seconds (%d packets/sec)", h.videoPackets-h.lastVideoPackets, (h.videoPackets-h.lastVideoPackets)/5)
-				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
-
-				h.lastVideoPackets = h.videoPackets
-				h.lastKeyFrames = 0
-				h.lastInterFrames = 0
-			case <-h.quitTimer:
-				ticker.Stop()
-				return
-			}
-		}
-	}()
+	h.setupDebug()
 
 	return nil
 }
@@ -189,22 +157,13 @@ func (h *ConnHandler) OnClose() {
 
 	h.quitTimer <- true
 
-	// if !h.authenticated {
-	// 	// We never published anything to end
-	// 	return
-	// }
+	if err := streamManager.StopStream(h.channelID); err != nil {
+		panic(err)
+	}
 
-	// Tell the orchestrator the stream has ended
-	h.orch.SendStreamPublishing(orchestrator.StreamPublishingMessage{
-		Context:   0,
-		ChannelID: h.channelID,
-		StreamID:  h.streamID,
-	})
-
-	// Tell the service the stream has ended
-	h.service.EndStream(h.streamID)
-
-	streamManager.RemoveStream(h.channelID)
+	if err := streamManager.RemoveStream(h.channelID); err != nil {
+		panic(err)
+	}
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
@@ -253,11 +212,6 @@ const (
 )
 
 func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
-	if h.rtpWriter == nil {
-		// Don't need to do anything with this packet since we're not ready to relay it
-		return nil
-	}
-
 	var video flvtag.VideoData
 	if err := flvtag.DecodeVideoData(payload, &video); err != nil {
 		return err
@@ -315,7 +269,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 			return err
 		}
 
-		if _, err = h.rtpWriter.Write(buf); err != nil {
+		if err := h.stream.WriteRTP(buf); err != nil {
 			return err
 		}
 	}
@@ -404,6 +358,31 @@ func (h *ConnHandler) appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer
 	}
 
 	return outBuf
+}
+
+func (h *ConnHandler) setupDebug() {
+	ticker := time.NewTicker(5 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				h.log.WithFields(logrus.Fields{
+					"keyframes":   h.lastKeyFrames,
+					"interframes": h.lastInterFrames,
+					"packets":     h.videoPackets - h.lastVideoPackets,
+				}).Debug("Processed 5s of input frames from RTMP input")
+				//h.log.Debugf("Processed %d video packets in the last 5 seconds (%d packets/sec)", h.videoPackets-h.lastVideoPackets, (h.videoPackets-h.lastVideoPackets)/5)
+				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
+
+				h.lastVideoPackets = h.videoPackets
+				h.lastKeyFrames = 0
+				h.lastInterFrames = 0
+			case <-h.quitTimer:
+				ticker.Stop()
+				return
+			}
+		}
+	}()
 }
 
 func isKeyFrame(data []byte) bool {

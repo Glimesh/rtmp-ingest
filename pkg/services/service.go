@@ -1,20 +1,22 @@
 package services
 
+import "github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+
 type Service interface {
 	// Name of the service, eg: Glimesh
 	Name() string
 	// Connect to the service
 	Connect() error
 	// GetHmacKey Get the private HMAC key for a given channel ID
-	GetHmacKey(channelID uint32) ([]byte, error)
+	GetHmacKey(channelID ftl.ChannelID) ([]byte, error)
 	// StartStream Starts a stream for a given channel
-	StartStream(channelID uint32) (uint32, error)
+	StartStream(channelID ftl.ChannelID) (ftl.StreamID, error)
 	// EndStream Marks the given stream ID as ended on the service
-	EndStream(streamID uint32) error
+	EndStream(streamID ftl.StreamID) error
 	// UpdateStreamMetadata Updates the service with additional metadata about a stream
-	UpdateStreamMetadata(streamID uint32, metadata StreamMetadata) error
+	UpdateStreamMetadata(streamID ftl.StreamID, metadata StreamMetadata) error
 	// SendJpegPreviewImage Sends a JPEG preview image of a stream to the service
-	SendJpegPreviewImage(streamID uint32) error
+	SendJpegPreviewImage(streamID ftl.StreamID) error
 }
 
 // TODO: Move outta here

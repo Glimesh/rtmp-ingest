@@ -3,6 +3,7 @@ package glimesh
 import (
 	"context"
 	"fmt"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/clone1018/rtmp-ingest/pkg/services"
 	"github.com/hasura/go-graphql-client"
 	"golang.org/x/oauth2/clientcredentials"
@@ -48,7 +49,7 @@ func (s *Service) Connect() error {
 	return nil
 }
 
-func (s *Service) GetHmacKey(channelID uint32) ([]byte, error) {
+func (s *Service) GetHmacKey(channelID ftl.ChannelID) ([]byte, error) {
 	var hmacQuery struct {
 		Channel struct {
 			HmacKey graphql.String
@@ -63,7 +64,7 @@ func (s *Service) GetHmacKey(channelID uint32) ([]byte, error) {
 	return []byte(hmacQuery.Channel.HmacKey), nil
 }
 
-func (s *Service) StartStream(channelID uint32) (uint32, error) {
+func (s *Service) StartStream(channelID ftl.ChannelID) (ftl.StreamID, error) {
 	var startStreamMutation struct {
 		Stream struct {
 			Id graphql.String
@@ -80,17 +81,17 @@ func (s *Service) StartStream(channelID uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	return uint32(id), nil
+	return ftl.StreamID(id), nil
 }
 
-func (s *Service) EndStream(streamID uint32) error {
+func (s *Service) EndStream(streamID ftl.StreamID) error {
 	return nil
 }
 
-func (s *Service) UpdateStreamMetadata(streamID uint32, metadata services.StreamMetadata) error {
+func (s *Service) UpdateStreamMetadata(streamID ftl.StreamID, metadata services.StreamMetadata) error {
 	return nil
 }
 
-func (s *Service) SendJpegPreviewImage(streamID uint32) error {
+func (s *Service) SendJpegPreviewImage(streamID ftl.StreamID) error {
 	return nil
 }
