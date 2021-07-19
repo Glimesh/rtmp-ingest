@@ -12,14 +12,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// Lord forgive me, for I have globalled.
-var (
-	streamManager StreamManager
-)
-
 func main() {
 	log := logrus.New()
 	log.Level = logrus.DebugLevel
+
+	var streamManager StreamManager
 
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -66,7 +63,7 @@ func main() {
 	streamManager = NewStreamManager(orch, glimeshService)
 
 	// Blocking call to start the RTMP server
-	NewRTMPServer(glimeshService, orch, log.WithFields(logrus.Fields{"app": "rtmp"}))
+	NewRTMPServer(streamManager, log.WithFields(logrus.Fields{"app": "rtmp"}))
 }
 
 func closeHandler(orch orchestrator.Client) {

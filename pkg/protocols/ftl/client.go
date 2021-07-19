@@ -24,7 +24,6 @@ type Conn struct {
 	controlScanner   *bufio.Reader
 	mediaConn        net.Conn
 
-	lastPing         time.Time
 	failedHeartbeats int
 	quitTimer        chan bool
 }

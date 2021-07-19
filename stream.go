@@ -42,7 +42,8 @@ func NewStreamManager(orchestrator orchestrator.Client, service services.Service
 	return StreamManager{
 		orchestrator: orchestrator,
 		service:      service,
-		streams:      make(map[ftl.ChannelID]*Stream)}
+		streams:      make(map[ftl.ChannelID]*Stream),
+	}
 }
 
 func (mgr *StreamManager) NewStream(channelID ftl.ChannelID) error {

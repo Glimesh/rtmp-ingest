@@ -45,7 +45,6 @@ func TestIntroMessage(t *testing.T) {
 	assert.Equal(intro.RegionCode, decoded.RegionCode)
 	assert.Equal(intro.Hostname, decoded.Hostname)
 
-
 	decodedHeader := DecodeMessageHeader(headerBuffer)
 	assert.Equal(message.Request, decodedHeader.Request)
 	assert.Equal(message.Success, decodedHeader.Success)
@@ -53,7 +52,6 @@ func TestIntroMessage(t *testing.T) {
 	assert.Equal(message.ID, decodedHeader.ID)
 	assert.Equal(message.PayloadLength, decodedHeader.PayloadLength)
 }
-
 
 func TestChannelSubscriptionMessage(t *testing.T) {
 	assert := assert.New(t)
@@ -88,7 +86,6 @@ func TestChannelSubscriptionMessage(t *testing.T) {
 	//assert.Equal(intro.VersionRevision, decoded.VersionRevision)
 	//assert.Equal(intro.RegionCode, decoded.RegionCode)
 	//assert.Equal(intro.Hostname, decoded.Hostname)
-
 
 	decodedHeader := DecodeMessageHeader(headerBuffer)
 	assert.Equal(message.Request, decodedHeader.Request)

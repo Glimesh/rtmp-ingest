@@ -78,12 +78,12 @@ type FtlConnection struct {
 	Callbacks Callbacks
 
 	// Not sure what this is used for?
-	targetHostname string
-	clientIP       string
+	//targetHostname string
+	//clientIP       string
 
 	// Unique Channel ID
-	channelID         int
-	streamKey         string
+	channelID int
+	//streamKey         string
 	assignedMediaPort int
 
 	// Pre-calculated hash we expect the client to return
@@ -313,8 +313,8 @@ func (conn *FtlConnection) processDotCommand() {
 		// TODO: Do this conversion during attribute collection so we don't miss any data
 		VideoPayloadType: uint8(conn.Metadata.VideoPayloadType),
 		AudioPayloadType: uint8(conn.Metadata.AudioPayloadType),
-		VideoIngestSsrc: conn.Metadata.VideoIngestSsrc,
-		AudioIngestSsrc: conn.Metadata.AudioIngestSsrc,
+		VideoIngestSsrc:  conn.Metadata.VideoIngestSsrc,
+		AudioIngestSsrc:  conn.Metadata.AudioIngestSsrc,
 	}
 
 	err := mediaConn.Listen()

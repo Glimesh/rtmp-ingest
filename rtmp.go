@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
 	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/clone1018/rtmp-ingest/pkg/services"
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/sirupsen/logrus"
@@ -20,7 +18,7 @@ import (
 	"time"
 )
 
-func NewRTMPServer(service services.Service, orch orchestrator.Client, log logrus.FieldLogger) {
+func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
 	log.Info("Starting RTMP Server on :1935")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", ":1935")
@@ -37,8 +35,7 @@ func NewRTMPServer(service services.Service, orch orchestrator.Client, log logru
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
 			return conn, &rtmp.ConnConfig{
 				Handler: &ConnHandler{
-					orch:      orch,
-					service:   service,
+					manager:   streamManager,
 					log:       log,
 					quitTimer: make(chan bool, 1),
 				},
@@ -57,8 +54,7 @@ func NewRTMPServer(service services.Service, orch orchestrator.Client, log logru
 
 type ConnHandler struct {
 	rtmp.DefaultHandler
-	orch    orchestrator.Client
-	service services.Service
+	manager StreamManager
 
 	log logrus.FieldLogger
 
@@ -68,9 +64,6 @@ type ConnHandler struct {
 	authenticated bool
 
 	stream *Stream
-
-	//mediaConn net.Conn
-	rtpWriter io.Writer
 
 	sequencer       rtp.Sequencer
 	videoPacketizer rtp.Packetizer
@@ -121,14 +114,14 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	h.channelID = ftl.ChannelID(u64)
 	h.streamKey = []byte(auth[1])
 
-	if err := streamManager.NewStream(h.channelID); err != nil {
+	if err := h.manager.NewStream(h.channelID); err != nil {
 		return err
 	}
-	if err := streamManager.Authenticate(h.channelID, h.streamKey); err != nil {
+	if err := h.manager.Authenticate(h.channelID, h.streamKey); err != nil {
 		return err
 	}
 
-	stream, err := streamManager.StartStream(h.channelID)
+	stream, err := h.manager.StartStream(h.channelID)
 	if err != nil {
 		return err
 	}
@@ -157,22 +150,17 @@ func (h *ConnHandler) OnClose() {
 
 	h.quitTimer <- true
 
-	if err := streamManager.StopStream(h.channelID); err != nil {
+	if err := h.manager.StopStream(h.channelID); err != nil {
 		panic(err)
 	}
 
-	if err := streamManager.RemoveStream(h.channelID); err != nil {
+	if err := h.manager.RemoveStream(h.channelID); err != nil {
 		panic(err)
 	}
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 	return nil
-
-	if h.rtpWriter == nil {
-		// Don't need to do anything with this packet since we're not ready to relay it
-		return nil
-	}
 
 	var audio flvtag.AudioData
 	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
@@ -194,7 +182,7 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 		if err != nil {
 			return err
 		}
-		if _, err = h.rtpWriter.Write(buf); err != nil {
+		if err := h.stream.WriteRTP(buf); err != nil {
 			return err
 		}
 	}
@@ -277,22 +265,22 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	return nil
 }
 
-func (h *ConnHandler) appendNALHeader(video flvtag.VideoData, videoBuffer []byte) []byte {
-	var outBuf []byte
-	for offset := 0; offset < len(videoBuffer); {
-		bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
-		if offset+bufferLength >= len(videoBuffer) {
-			break
-		}
-
-		offset += headerLengthField
-		outBuf = append(outBuf, []byte{0x00, 0x00, 0x00, 0x01}...)
-		outBuf = append(outBuf, videoBuffer[offset:offset+bufferLength]...)
-
-		offset += bufferLength
-	}
-	return outBuf
-}
+//func (h *ConnHandler) appendNALHeader(video flvtag.VideoData, videoBuffer []byte) []byte {
+//	var outBuf []byte
+//	for offset := 0; offset < len(videoBuffer); {
+//		bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
+//		if offset+bufferLength >= len(videoBuffer) {
+//			break
+//		}
+//
+//		offset += headerLengthField
+//		outBuf = append(outBuf, []byte{0x00, 0x00, 0x00, 0x01}...)
+//		outBuf = append(outBuf, videoBuffer[offset:offset+bufferLength]...)
+//
+//		offset += bufferLength
+//	}
+//	return outBuf
+//}
 func (h *ConnHandler) appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) []byte {
 	hasSpsPps := false
 	var outBuf []byte
@@ -385,20 +373,20 @@ func (h *ConnHandler) setupDebug() {
 	}()
 }
 
-func isKeyFrame(data []byte) bool {
-	const typeSTAPA = 24
-
-	var word uint32
-
-	payload := bytes.NewReader(data)
-	err := binary.Read(payload, binary.BigEndian, &word)
-
-	if err != nil || (word&0x1F000000)>>24 != typeSTAPA {
-		return false
-	}
-
-	return word&0x1F == 7
-}
+//func isKeyFrame(data []byte) bool {
+//	const typeSTAPA = 24
+//
+//	var word uint32
+//
+//	payload := bytes.NewReader(data)
+//	err := binary.Read(payload, binary.BigEndian, &word)
+//
+//	if err != nil || (word&0x1F000000)>>24 != typeSTAPA {
+//		return false
+//	}
+//
+//	return word&0x1F == 7
+//}
 
 func annexBPrefix() []byte {
 	return []byte{0x00, 0x00, 0x00, 0x01}
