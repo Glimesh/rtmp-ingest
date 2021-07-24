@@ -68,7 +68,8 @@ type ConnHandler struct {
 	sequencer       rtp.Sequencer
 	videoPacketizer rtp.Packetizer
 	audioPacketizer rtp.Packetizer
-	clockRate       uint32
+	videoClockRate  uint32
+	audioClockRate  uint32
 
 	videoPackets     int
 	lastVideoPackets int
@@ -84,11 +85,13 @@ type ConnHandler struct {
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
 	h.log.Info("OnServe: %#v", conn)
-	h.clockRate = 90000
 }
 
 func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) (err error) {
 	h.log.Info("OnConnect: %#v", cmd)
+
+	h.videoClockRate = 90000
+	h.audioClockRate = 48000
 
 	return nil
 }
@@ -137,8 +140,8 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 
 	h.authenticated = true
 	h.sequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
-	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.sequencer, h.clockRate)
-	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.sequencer, h.clockRate)
+	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.sequencer, h.videoClockRate)
+	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.sequencer, h.audioClockRate)
 
 	h.setupDebug()
 
@@ -173,7 +176,7 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 	}
 	outBuf := data.Bytes()
 
-	samples := uint32(len(outBuf)) + h.clockRate
+	samples := uint32(len(outBuf)) + h.audioClockRate
 	// Of course this doesn't fucking work, it's an h264 packetizer
 	packets := h.audioPacketizer.Packetize(outBuf, samples)
 
@@ -233,7 +236,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	outBuf := h.appendNALHeaderSpecial(video, data.Bytes())
 
 	// Likely there's more than one set of RTP packets in this read
-	samples := uint32(len(outBuf)) + h.clockRate
+	samples := uint32(len(outBuf)) + h.videoClockRate
 	packets := h.videoPacketizer.Packetize(outBuf, samples)
 
 	h.videoPackets += len(packets)
@@ -251,6 +254,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// https://github.com/pion/rtsp-bench/blob/master/server/main.go
 	// https://github.com/pion/obs-wormhole/blob/master/internal/rtmp/rtmp.go
 
+	//start := time.Now()
 	for _, p := range packets {
 		buf, err := p.Marshal()
 		if err != nil {
@@ -261,6 +265,8 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 			return err
 		}
 	}
+	//elapsed := time.Since(start)
+	//h.log.Infof("WriteRTP's took %s for %d packets", elapsed, len(packets))
 
 	return nil
 }

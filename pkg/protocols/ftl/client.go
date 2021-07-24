@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -196,7 +195,7 @@ func (conn *Conn) sendControlMessage(message string, needResponse bool) (resp st
 
 func (conn *Conn) writeControlMessage(message string) error {
 	final := message + "\r\n\r\n"
-	log.Printf("SEND: %q", final)
+	//log.Printf("SEND: %q", final)
 	_, err := conn.controlConn.Write([]byte(final))
 	return err
 }
@@ -211,7 +210,7 @@ func (conn *Conn) readControlMessage() (string, error) {
 		return "", err
 	}
 
-	log.Printf("RECV: %q", recv)
+	//log.Printf("RECV: %q", recv)
 	return strings.TrimRight(recv, "\n"), nil
 }
 

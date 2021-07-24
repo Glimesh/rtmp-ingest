@@ -16,7 +16,8 @@ type Stream struct {
 	mediaStarted bool
 
 	// rtpWriter is a multi writer for all of our relays
-	relays map[string]*StreamRelay
+	rtpWriter *multiWriter
+	relays    map[string]*StreamRelay
 
 	channelID ftl.ChannelID
 	streamID  ftl.StreamID
@@ -47,11 +48,16 @@ func NewStreamManager(orchestrator orchestrator.Client, service services.Service
 }
 
 func (mgr *StreamManager) NewStream(channelID ftl.ChannelID) error {
+	mw := MultiWriter()
+	// Helps the compiler know what we're talking about
+	var m = mw.(*multiWriter)
+
 	stream := &Stream{
 		authenticated: false,
 		mediaStarted:  false,
 		channelID:     channelID,
 		relays:        make(map[string]*StreamRelay),
+		rtpWriter:     m,
 	}
 
 	if _, exists := mgr.streams[channelID]; exists {
@@ -178,6 +184,9 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 		ftlMedia:       ftlMedia,
 	}
 
+	// Add to MultiWriter
+	stream.rtpWriter.Append(ftlMedia)
+
 	return nil
 }
 
@@ -192,6 +201,9 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 		return errors.New("relay does not exist in state")
 	}
 
+	// Remove from MultiWriter
+	stream.rtpWriter.Remove(stream.relays[targetHostname].ftlMedia)
+
 	if err := stream.relays[targetHostname].close(); err != nil {
 		return err
 	}
@@ -201,16 +213,9 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 }
 
 func (stream *Stream) WriteRTP(buf []byte) error {
-	// Although potentially slower, we do this so we can not catastrophically fail if one of our relay servers is
-	// not reading properly, or has some other error
-	for _, relay := range stream.relays {
-		_, err := relay.ftlMedia.Write(buf)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	//_, err := stream.rtpWriter.Write(buf)
+	_, err := stream.rtpWriter.ConcurrentWrite(buf)
+	return err
 }
 
 // AddStream adds a stream to the manager in an unauthenticated state
