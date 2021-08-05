@@ -67,7 +67,7 @@ func (client *Client) Connect(transport net.Conn) error {
 		VersionRevision: 0,
 		RelayLayer:      0,
 		RegionCode:      client.config.RegionCode,
-		Hostname:        client.config.RegionCode,
+		Hostname:        client.config.Hostname,
 	})
 	if err != nil {
 		client.connected = false
