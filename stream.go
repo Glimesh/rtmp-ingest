@@ -6,6 +6,7 @@ import (
 	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
 	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/clone1018/rtmp-ingest/pkg/services"
+	"github.com/pion/rtp"
 	"net"
 )
 
@@ -212,9 +213,12 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 	return nil
 }
 
-func (stream *Stream) WriteRTP(buf []byte) error {
-	//_, err := stream.rtpWriter.Write(buf)
-	_, err := stream.rtpWriter.ConcurrentWrite(buf)
+func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
+	buf, err := packet.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = stream.rtpWriter.ConcurrentWrite(buf)
 	return err
 }
 

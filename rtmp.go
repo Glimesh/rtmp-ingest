@@ -11,6 +11,7 @@ import (
 	flvtag "github.com/yutopp/go-flv/tag"
 	"github.com/yutopp/go-rtmp"
 	rtmpmsg "github.com/yutopp/go-rtmp/message"
+	opus "gopkg.in/hraban/opus.v2"
 	"io"
 	"net"
 	"strconv"
@@ -80,7 +81,8 @@ type ConnHandler struct {
 	sps []byte
 	pps []byte
 
-	quitTimer chan bool
+	quitTimer    chan bool
+	audioEncoder *opus.Encoder
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -143,7 +145,10 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.sequencer, h.videoClockRate)
 	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.sequencer, h.audioClockRate)
 
-	h.setupDebug()
+	h.audioEncoder, err = opus.NewEncoder(int(h.audioClockRate), 2, opus.AppAudio)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -165,32 +170,54 @@ func (h *ConnHandler) OnClose() {
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 	return nil
 
-	var audio flvtag.AudioData
-	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
-		return err
-	}
-
-	data := new(bytes.Buffer)
-	if _, err := io.Copy(data, audio.Data); err != nil {
-		return err
-	}
-	outBuf := data.Bytes()
-
-	samples := uint32(len(outBuf)) + h.audioClockRate
-	// Of course this doesn't fucking work, it's an h264 packetizer
-	packets := h.audioPacketizer.Packetize(outBuf, samples)
-
-	for _, p := range packets {
-		buf, err := p.Marshal()
-		if err != nil {
-			return err
-		}
-		if err := h.stream.WriteRTP(buf); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	// Convert AAC to opus
+	// https://github.com/notedit/rtc-rtmp - Has c bindings
+	//var audio flvtag.AudioData
+	//if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
+	//	return err
+	//}
+	//
+	//data := new(bytes.Buffer)
+	//if _, err := io.Copy(data, audio.Data); err != nil {
+	//	return err
+	//}
+	//outBuf := data.Bytes()
+	//
+	//const bufferSize = 1000 // choose any buffer size you like. 1k is plenty.
+	//
+	//// Check the frame size. You don't need to do this if you trust your input.
+	//frameSize := len(outBuf) // must be interleaved if stereo
+	//frameSizeMs := float32(frameSize) / 2 * 1000 / float32(h.audioClockRate)
+	//switch frameSizeMs {
+	//case 2.5, 5, 10, 20, 40, 60:
+	//	// Good.
+	//default:
+	//	h.log.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
+	//	return fmt.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
+	//}
+	//
+	//opusData := make([]byte, bufferSize)
+	//n, err := h.audioEncoder.Encode(outBuf, opusData)
+	//if err != nil {
+	//	return err
+	//}
+	//opusOutput := opusData[:n]
+	//
+	//samples := uint32(len(opusData)) + h.audioClockRate
+	//// Of course this doesn't fucking work, it's an h264 packetizer
+	//packets := h.audioPacketizer.Packetize(opusOutput, samples)
+	//
+	//for _, p := range packets {
+	//	buf, err := p.Marshal()
+	//	if err != nil {
+	//		return err
+	//	}
+	//	if err := h.stream.WriteRTP(buf); err != nil {
+	//		return err
+	//	}
+	//}
+	//
+	//return nil
 }
 
 // GStreamer -- AudioData: {SoundFormat:7 SoundRate:0 SoundSize:1 SoundType:0 AACPacketType:0 Data:0x1400022c2a0}
@@ -256,12 +283,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 
 	//start := time.Now()
 	for _, p := range packets {
-		buf, err := p.Marshal()
-		if err != nil {
-			return err
-		}
-
-		if err := h.stream.WriteRTP(buf); err != nil {
+		if err := h.stream.WriteRTP(p); err != nil {
 			return err
 		}
 	}
