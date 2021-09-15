@@ -3,20 +3,25 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
-	"github.com/sirupsen/logrus"
-	flvtag "github.com/yutopp/go-flv/tag"
-	"github.com/yutopp/go-rtmp"
-	rtmpmsg "github.com/yutopp/go-rtmp/message"
-	opus "gopkg.in/hraban/opus.v2"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/kentuckyfriedtakahe/go-fdkaac/fdkaac"
+	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
+	"github.com/sirupsen/logrus"
+	"github.com/yutopp/go-flv/tag"
+	flvtag "github.com/yutopp/go-flv/tag"
+	"github.com/yutopp/go-rtmp"
+	rtmpmsg "github.com/yutopp/go-rtmp/message"
+	opus "gopkg.in/hraban/opus.v2"
 )
 
 func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
@@ -72,6 +77,7 @@ type ConnHandler struct {
 	videoClockRate  uint32
 	audioClockRate  uint32
 
+	audioPackets     int
 	videoPackets     int
 	lastVideoPackets int
 
@@ -82,7 +88,11 @@ type ConnHandler struct {
 	pps []byte
 
 	quitTimer    chan bool
+	audioDecoder *fdkaac.AacDecoder
+	audioBuffer  []byte
 	audioEncoder *opus.Encoder
+
+	audioTimestamp uint32
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -94,6 +104,8 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 
 	h.videoClockRate = 90000
 	h.audioClockRate = 48000
+
+	// h.ctx = avformat.AvformatAllocContext()
 
 	return nil
 }
@@ -149,6 +161,7 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	if err != nil {
 		return err
 	}
+	h.audioDecoder = fdkaac.NewAacDecoder()
 
 	return nil
 }
@@ -165,59 +178,78 @@ func (h *ConnHandler) OnClose() {
 	if err := h.manager.RemoveStream(h.channelID); err != nil {
 		panic(err)
 	}
+
+	if h.audioDecoder != nil {
+		h.audioDecoder.Close()
+		h.audioDecoder = nil
+	}
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
-	return nil
+	// return nil
 
 	// Convert AAC to opus
 	// https://github.com/notedit/rtc-rtmp - Has c bindings
-	//var audio flvtag.AudioData
-	//if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
-	//	return err
-	//}
-	//
-	//data := new(bytes.Buffer)
-	//if _, err := io.Copy(data, audio.Data); err != nil {
-	//	return err
-	//}
-	//outBuf := data.Bytes()
-	//
-	//const bufferSize = 1000 // choose any buffer size you like. 1k is plenty.
-	//
-	//// Check the frame size. You don't need to do this if you trust your input.
-	//frameSize := len(outBuf) // must be interleaved if stereo
-	//frameSizeMs := float32(frameSize) / 2 * 1000 / float32(h.audioClockRate)
-	//switch frameSizeMs {
-	//case 2.5, 5, 10, 20, 40, 60:
-	//	// Good.
-	//default:
-	//	h.log.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
-	//	return fmt.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
-	//}
-	//
-	//opusData := make([]byte, bufferSize)
-	//n, err := h.audioEncoder.Encode(outBuf, opusData)
-	//if err != nil {
-	//	return err
-	//}
-	//opusOutput := opusData[:n]
-	//
-	//samples := uint32(len(opusData)) + h.audioClockRate
-	//// Of course this doesn't fucking work, it's an h264 packetizer
-	//packets := h.audioPacketizer.Packetize(opusOutput, samples)
-	//
-	//for _, p := range packets {
-	//	buf, err := p.Marshal()
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if err := h.stream.WriteRTP(buf); err != nil {
-	//		return err
-	//	}
-	//}
-	//
-	//return nil
+
+	var audio flvtag.AudioData
+	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
+		return err
+	}
+
+	data := new(bytes.Buffer)
+	if _, err := io.Copy(data, audio.Data); err != nil {
+		return err
+	}
+	bytes := data.Bytes()
+
+	if audio.AACPacketType == tag.AACPacketTypeSequenceHeader {
+		h.log.Infof("Created new codec %s", hex.EncodeToString(bytes))
+		err := h.audioDecoder.InitRaw(bytes)
+
+		if err != nil {
+			h.log.WithError(err).Errorf("error initialising stream")
+			return fmt.Errorf("can't initilise codec with %s", hex.EncodeToString(bytes))
+		}
+
+		return nil
+	}
+
+	pcm, err := h.audioDecoder.Decode(bytes)
+	if err != nil {
+		h.log.Errorf("decode error: %s %s", hex.EncodeToString(bytes), err)
+		return fmt.Errorf("decode error")
+	}
+
+	h.audioPackets++
+
+	// h.log.Info("A=", timestamp, h.audioTimestamp/48)
+
+	blockSize := 960
+	for h.audioBuffer = append(h.audioBuffer, pcm...); len(h.audioBuffer) >= blockSize*4; h.audioBuffer = h.audioBuffer[blockSize*4:] {
+		pcm16 := make([]int16, blockSize*2)
+		for i := 0; i < len(pcm16); i++ {
+			pcm16[i] = int16(binary.LittleEndian.Uint16(h.audioBuffer[i*2:]))
+		}
+		bufferSize := 1024
+		opusData := make([]byte, bufferSize)
+		n, err := h.audioEncoder.Encode(pcm16, opusData)
+		if err != nil {
+			return err
+		}
+		opusOutput := opusData[:n]
+
+		packets := h.audioPacketizer.Packetize(opusOutput, uint32(blockSize))
+
+		for _, p := range packets {
+			p.Header.Timestamp = h.audioTimestamp
+
+			if err := h.stream.WriteRTP(p); err != nil {
+				return err
+			}
+		}
+		h.audioTimestamp = h.audioTimestamp + uint32(blockSize)
+	}
+	return nil
 }
 
 // GStreamer -- AudioData: {SoundFormat:7 SoundRate:0 SoundSize:1 SoundType:0 AACPacketType:0 Data:0x1400022c2a0}
@@ -282,7 +314,9 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// https://github.com/pion/obs-wormhole/blob/master/internal/rtmp/rtmp.go
 
 	//start := time.Now()
+	// h.log.Info("V=", timestamp)
 	for _, p := range packets {
+		p.Header.Timestamp = timestamp
 		if err := h.stream.WriteRTP(p); err != nil {
 			return err
 		}

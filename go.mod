@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/hasura/go-graphql-client v0.2.0
+	github.com/kentuckyfriedtakahe/go-fdkaac v0.0.0-20210915201907-36688fb0387d // indirect
 	github.com/pion/rtp v1.6.5
 	github.com/pion/webrtc/v3 v3.0.30
 	github.com/sirupsen/logrus v1.1.1
