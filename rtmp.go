@@ -92,7 +92,14 @@ type ConnHandler struct {
 	audioBuffer  []byte
 	audioEncoder *opus.Encoder
 
-	audioTimestamp uint32
+	startTime int64
+
+	audioDts      uint64
+	videoDts      uint64
+	videoDtsError float32
+
+	lastVideoTimestamp uint32
+	lastAudioTimestamp uint32
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -104,6 +111,10 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 
 	h.videoClockRate = 90000
 	h.audioClockRate = 48000
+
+	h.startTime = time.Now().Unix()
+	h.audioDts = 0
+	h.videoDts = 0
 
 	// h.ctx = avformat.AvformatAllocContext()
 
@@ -166,6 +177,8 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	return nil
 }
 
+const USEC_IN_SEC = 1000000
+
 func (h *ConnHandler) OnClose() {
 	h.log.Info("OnClose")
 
@@ -186,8 +199,6 @@ func (h *ConnHandler) OnClose() {
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
-	// return nil
-
 	// Convert AAC to opus
 	// https://github.com/notedit/rtc-rtmp - Has c bindings
 
@@ -222,7 +233,17 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 
 	h.audioPackets++
 
-	// h.log.Info("A=", timestamp, h.audioTimestamp/48)
+	// h.audioDts += uint64(h.audioClockRate) * 1000
+
+	// audioPacketDuration := 20
+	// h.audioDts += uint64(audioPacketDuration * 1000)
+	// audioTimestamp := (uint64(h.audioDts) - uint64(h.startTime)) * uint64(h.audioClockRate)
+	// actualTimestamp := uint32((audioTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+	// // fmt.Printf("AUDIO: startTime=%d audioDts=%d audioTimestamp=%d actualTimestamp=%d\n", h.startTime, h.audioDts, audioTimestamp, actualTimestamp)
+	// fmt.Printf("Audio DTS Diff: %d\n", uint32(actualTimestamp)-h.lastAudioTimestamp)
+	// h.lastAudioTimestamp = uint32(actualTimestamp)
+	// // audioTimestamp := (time.Now().Unix() - h.startTime) * int64(h.audioClockRate)
+	// // actualTimestamp := uint32(audioTimestamp+USEC_IN_SEC/2) / USEC_IN_SEC
 
 	blockSize := 960
 	for h.audioBuffer = append(h.audioBuffer, pcm...); len(h.audioBuffer) >= blockSize*4; h.audioBuffer = h.audioBuffer[blockSize*4:] {
@@ -241,13 +262,14 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 		packets := h.audioPacketizer.Packetize(opusOutput, uint32(blockSize))
 
 		for _, p := range packets {
-			p.Header.Timestamp = h.audioTimestamp
+			// h.log.Info("A=", actualTimestamp)
+			// p.Header.Timestamp = uint32(actualTimestamp)
 
 			if err := h.stream.WriteRTP(p); err != nil {
 				return err
 			}
 		}
-		h.audioTimestamp = h.audioTimestamp + uint32(blockSize)
+		// h.audioTimestamp = h.audioTimestamp + uint32(blockSize)
 	}
 	return nil
 }
@@ -314,9 +336,29 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// https://github.com/pion/obs-wormhole/blob/master/internal/rtmp/rtmp.go
 
 	//start := time.Now()
-	// h.log.Info("V=", timestamp)
+
+	fpsDen := 1
+	fpsNum := 30
+	// if video.FrameType == flvtag.FrameTypeKeyFrame {
+	dst_usec_f := float32(fpsDen)*1000000.0/float32(fpsNum) + h.videoDtsError
+	dts_increment_usec := uint64(dst_usec_f)
+	h.videoDtsError = dst_usec_f - float32(dts_increment_usec)
+	// fmt.Println("Adding ", dts_increment_usec)
+	h.videoDts = h.videoDts + dts_increment_usec
+	// }
+
+	videoTimestamp := (uint64(h.videoDts) - uint64(h.startTime)) * uint64(h.videoClockRate)
+	actualTimestamp := uint32((videoTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	fmt.Printf("Video DTS Diff: %d\n", uint32(actualTimestamp)-h.lastVideoTimestamp)
+	h.lastVideoTimestamp = uint32(actualTimestamp)
+
+	// fmt.Printf("VIDEO: startTime=%d videoDts=%d dst_usec_f=%f dts_increment_usec=%d videoDtsError=%f videoTimestamp=%d actualTimestamp=%d\n", h.startTime, h.videoDts, dst_usec_f, dts_increment_usec, h.videoDtsError, videoTimestamp, actualTimestamp)
+
 	for _, p := range packets {
-		p.Header.Timestamp = timestamp
+		// h.log.Info("V=", uint32(videoTimestamp))
+		h.log.Info(p.String())
+		p.Header.Timestamp = uint32(actualTimestamp)
 		if err := h.stream.WriteRTP(p); err != nil {
 			return err
 		}
