@@ -14,8 +14,8 @@ import (
 
 	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/kentuckyfriedtakahe/go-fdkaac/fdkaac"
-	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
+	"github.com/pion/rtp/v2"
+	"github.com/pion/rtp/v2/codecs"
 	"github.com/sirupsen/logrus"
 	"github.com/yutopp/go-flv/tag"
 	flvtag "github.com/yutopp/go-flv/tag"
@@ -97,6 +97,7 @@ type ConnHandler struct {
 	audioDts      uint64
 	videoDts      uint64
 	videoDtsError float32
+	startDtsUsec  uint64
 
 	lastVideoTimestamp uint32
 	lastAudioTimestamp uint32
@@ -115,6 +116,7 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 	h.startTime = time.Now().Unix()
 	h.audioDts = 0
 	h.videoDts = 0
+	h.startDtsUsec = uint64(usecTimestamp())
 
 	// h.ctx = avformat.AvformatAllocContext()
 
@@ -245,6 +247,10 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 	// // audioTimestamp := (time.Now().Unix() - h.startTime) * int64(h.audioClockRate)
 	// // actualTimestamp := uint32(audioTimestamp+USEC_IN_SEC/2) / USEC_IN_SEC
 
+	// dtsUsec := uint64(usecTimestamp())
+	// myTimestamp := ((dtsUsec - h.startDtsUsec) * (uint64(h.audioClockRate)))
+	// finalTimestamp := uint32((myTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
 	blockSize := 960
 	for h.audioBuffer = append(h.audioBuffer, pcm...); len(h.audioBuffer) >= blockSize*4; h.audioBuffer = h.audioBuffer[blockSize*4:] {
 		pcm16 := make([]int16, blockSize*2)
@@ -264,6 +270,7 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 		for _, p := range packets {
 			// h.log.Info("A=", actualTimestamp)
 			// p.Header.Timestamp = uint32(actualTimestamp)
+			// p.Header.Timestamp = finalTimestamp
 
 			if err := h.stream.WriteRTP(p); err != nil {
 				return err
@@ -337,28 +344,45 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 
 	//start := time.Now()
 
-	fpsDen := 1
-	fpsNum := 30
-	// if video.FrameType == flvtag.FrameTypeKeyFrame {
-	dst_usec_f := float32(fpsDen)*1000000.0/float32(fpsNum) + h.videoDtsError
-	dts_increment_usec := uint64(dst_usec_f)
-	h.videoDtsError = dst_usec_f - float32(dts_increment_usec)
-	// fmt.Println("Adding ", dts_increment_usec)
-	h.videoDts = h.videoDts + dts_increment_usec
+	// 2021-10-22 Luke Notes
+	// _update_timestamp in media.c has this code
+	// _update_timestmap is called in both media_send_video and media_send_audio
+	// 3 params: FTL stream configuration, media component (audio or video), and dts_usec
+	// dts_usec comes from anytime ftl_ingest_send_media_dts is called, in the first example
+	//   it comes from ftl_app/main.c which calls timeval_to_us(&frameTime)
+	// A note from FTL: In a real app these timestamps should come from the samples!
+
+	// uint64_t timeval_to_us(struct timeval *tv)
+	// {
+	//   return tv->tv_sec * (uint64_t)1000000 + tv->tv_usec;
 	// }
 
-	videoTimestamp := (uint64(h.videoDts) - uint64(h.startTime)) * uint64(h.videoClockRate)
-	actualTimestamp := uint32((videoTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+	// fpsDen := 1
+	// fpsNum := 30
+	// // if video.FrameType == flvtag.FrameTypeKeyFrame {
+	// dst_usec_f := float32(fpsDen)*1000000.0/float32(fpsNum) + h.videoDtsError
+	// dts_increment_usec := uint64(dst_usec_f)
+	// h.videoDtsError = dst_usec_f - float32(dts_increment_usec)
+	// // fmt.Println("Adding ", dts_increment_usec)
+	// h.videoDts = h.videoDts + dts_increment_usec
+	// // }
 
-	fmt.Printf("Video DTS Diff: %d\n", uint32(actualTimestamp)-h.lastVideoTimestamp)
-	h.lastVideoTimestamp = uint32(actualTimestamp)
+	// videoTimestamp := (uint64(h.videoDts) - uint64(h.startTime)) * uint64(h.videoClockRate)
+	// actualTimestamp := uint32((videoTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	// dtsUsec := uint64(usecTimestamp())
+	// myTimestamp := ((dtsUsec - h.startDtsUsec) * (uint64(h.videoClockRate)))
+	// finalTimestamp := uint32((myTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	// fmt.Printf("Video DTS Diff: %d\n", uint32(actualTimestamp)-h.lastVideoTimestamp)
+	// h.lastVideoTimestamp = uint32(actualTimestamp)
 
 	// fmt.Printf("VIDEO: startTime=%d videoDts=%d dst_usec_f=%f dts_increment_usec=%d videoDtsError=%f videoTimestamp=%d actualTimestamp=%d\n", h.startTime, h.videoDts, dst_usec_f, dts_increment_usec, h.videoDtsError, videoTimestamp, actualTimestamp)
 
 	for _, p := range packets {
-		// h.log.Info("V=", uint32(videoTimestamp))
-		h.log.Info(p.String())
-		p.Header.Timestamp = uint32(actualTimestamp)
+		// h.log.Info("V=", uint32(actualTimestamp))
+		// h.log.Info(p.String())
+		// p.Header.Timestamp = finalTimestamp
 		if err := h.stream.WriteRTP(p); err != nil {
 			return err
 		}
@@ -367,6 +391,10 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	//h.log.Infof("WriteRTP's took %s for %d packets", elapsed, len(packets))
 
 	return nil
+}
+
+func usecTimestamp() int64 {
+	return time.Now().UnixNano() / int64(time.Microsecond)
 }
 
 //func (h *ConnHandler) appendNALHeader(video flvtag.VideoData, videoBuffer []byte) []byte {

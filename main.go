@@ -1,10 +1,12 @@
 package main
 
 import (
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 	"net"
 	"os"
 	"os/signal"
+	"syscall"
+
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
 
 	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
 	"github.com/clone1018/rtmp-ingest/pkg/services/glimesh"
@@ -68,8 +70,7 @@ func main() {
 
 func closeHandler(orch orchestrator.Client) {
 	c := make(chan os.Signal)
-	// Wonder if this should listen to os.Kill as well?
-	signal.Notify(c, os.Interrupt)
+	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		<-c
 
