@@ -129,7 +129,7 @@ func (client *Client) Close() error {
 
 	// Both of these can error, but we're trying to close the connection anyway
 	client.SendOutro(OutroMessage{Reason: "Going away"})
-	client.transport.Close()
+	// client.transport.Close()
 
 	client.connected = false
 	return nil

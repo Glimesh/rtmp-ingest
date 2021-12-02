@@ -3,20 +3,25 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/pion/rtp"
-	"github.com/pion/rtp/codecs"
-	"github.com/sirupsen/logrus"
-	flvtag "github.com/yutopp/go-flv/tag"
-	"github.com/yutopp/go-rtmp"
-	rtmpmsg "github.com/yutopp/go-rtmp/message"
-	opus "gopkg.in/hraban/opus.v2"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Glimesh/go-fdkaac/fdkaac"
+	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/pion/rtp/v2"
+	"github.com/pion/rtp/v2/codecs"
+	"github.com/sirupsen/logrus"
+	"github.com/yutopp/go-flv/tag"
+	flvtag "github.com/yutopp/go-flv/tag"
+	"github.com/yutopp/go-rtmp"
+	rtmpmsg "github.com/yutopp/go-rtmp/message"
+	opus "gopkg.in/hraban/opus.v2"
 )
 
 func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
@@ -66,12 +71,14 @@ type ConnHandler struct {
 
 	stream *Stream
 
-	sequencer       rtp.Sequencer
+	audioSequencer  rtp.Sequencer
+	videoSequencer  rtp.Sequencer
 	videoPacketizer rtp.Packetizer
 	audioPacketizer rtp.Packetizer
 	videoClockRate  uint32
 	audioClockRate  uint32
 
+	audioPackets     int
 	videoPackets     int
 	lastVideoPackets int
 
@@ -82,7 +89,21 @@ type ConnHandler struct {
 	pps []byte
 
 	quitTimer    chan bool
+	audioDecoder *fdkaac.AacDecoder
+	audioBuffer  []byte
 	audioEncoder *opus.Encoder
+
+	startTime int64
+
+	audioDts      uint64
+	videoDts      uint64
+	videoDtsError float32
+	startDtsUsec  uint64
+
+	lastTimestamp uint32
+
+	lastVideoTimestamp uint32
+	lastAudioTimestamp uint32
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -93,7 +114,18 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 	h.log.Info("OnConnect: %#v", cmd)
 
 	h.videoClockRate = 90000
+	// TODO: This can be customized by the user, we should figure out how to infer it from the client
 	h.audioClockRate = 48000
+
+	h.startTime = time.Now().Unix()
+	h.audioDts = 0
+	h.videoDts = 0
+	h.startDtsUsec = uint64(usecTimestamp())
+
+	h.lastVideoTimestamp = 1
+	h.lastAudioTimestamp = 1
+
+	// h.ctx = avformat.AvformatAllocContext()
 
 	return nil
 }
@@ -120,14 +152,17 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	h.streamKey = []byte(auth[1])
 
 	if err := h.manager.NewStream(h.channelID); err != nil {
+		h.log.Error(err)
 		return err
 	}
 	if err := h.manager.Authenticate(h.channelID, h.streamKey); err != nil {
+		h.log.Error(err)
 		return err
 	}
 
 	stream, err := h.manager.StartStream(h.channelID)
 	if err != nil {
+		h.log.Error(err)
 		return err
 	}
 
@@ -141,17 +176,21 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	})
 
 	h.authenticated = true
-	h.sequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
-	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.sequencer, h.videoClockRate)
-	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.sequencer, h.audioClockRate)
+	h.audioSequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
+	h.videoSequencer = rtp.NewFixedSequencer(25000)
+	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, h.videoClockRate)
+	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.audioSequencer, h.audioClockRate)
 
 	h.audioEncoder, err = opus.NewEncoder(int(h.audioClockRate), 2, opus.AppAudio)
 	if err != nil {
 		return err
 	}
+	h.audioDecoder = fdkaac.NewAacDecoder()
 
 	return nil
 }
+
+const USEC_IN_SEC = 1000000
 
 func (h *ConnHandler) OnClose() {
 	h.log.Info("OnClose")
@@ -165,59 +204,96 @@ func (h *ConnHandler) OnClose() {
 	if err := h.manager.RemoveStream(h.channelID); err != nil {
 		panic(err)
 	}
+
+	if h.audioDecoder != nil {
+		h.audioDecoder.Close()
+		h.audioDecoder = nil
+	}
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
-	return nil
-
 	// Convert AAC to opus
 	// https://github.com/notedit/rtc-rtmp - Has c bindings
-	//var audio flvtag.AudioData
-	//if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
-	//	return err
-	//}
-	//
-	//data := new(bytes.Buffer)
-	//if _, err := io.Copy(data, audio.Data); err != nil {
-	//	return err
-	//}
-	//outBuf := data.Bytes()
-	//
-	//const bufferSize = 1000 // choose any buffer size you like. 1k is plenty.
-	//
-	//// Check the frame size. You don't need to do this if you trust your input.
-	//frameSize := len(outBuf) // must be interleaved if stereo
-	//frameSizeMs := float32(frameSize) / 2 * 1000 / float32(h.audioClockRate)
-	//switch frameSizeMs {
-	//case 2.5, 5, 10, 20, 40, 60:
-	//	// Good.
-	//default:
-	//	h.log.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
-	//	return fmt.Errorf("Illegal frame size: %d bytes (%f ms)", frameSize, frameSizeMs)
-	//}
-	//
-	//opusData := make([]byte, bufferSize)
-	//n, err := h.audioEncoder.Encode(outBuf, opusData)
-	//if err != nil {
-	//	return err
-	//}
-	//opusOutput := opusData[:n]
-	//
-	//samples := uint32(len(opusData)) + h.audioClockRate
-	//// Of course this doesn't fucking work, it's an h264 packetizer
-	//packets := h.audioPacketizer.Packetize(opusOutput, samples)
-	//
-	//for _, p := range packets {
-	//	buf, err := p.Marshal()
-	//	if err != nil {
-	//		return err
-	//	}
-	//	if err := h.stream.WriteRTP(buf); err != nil {
-	//		return err
-	//	}
-	//}
-	//
-	//return nil
+
+	var audio flvtag.AudioData
+	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
+		return err
+	}
+
+	data := new(bytes.Buffer)
+	if _, err := io.Copy(data, audio.Data); err != nil {
+		return err
+	}
+	bytes := data.Bytes()
+
+	if audio.AACPacketType == tag.AACPacketTypeSequenceHeader {
+		h.log.Infof("Created new codec %s", hex.EncodeToString(bytes))
+		err := h.audioDecoder.InitRaw(bytes)
+
+		if err != nil {
+			h.log.WithError(err).Errorf("error initialising stream")
+			return fmt.Errorf("can't initilise codec with %s", hex.EncodeToString(bytes))
+		}
+
+		return nil
+	}
+
+	pcm, err := h.audioDecoder.Decode(bytes)
+	if err != nil {
+		h.log.Errorf("decode error: %s %s", hex.EncodeToString(bytes), err)
+		return fmt.Errorf("decode error")
+	}
+
+	h.audioPackets++
+
+	// h.audioDts += uint64(h.audioClockRate) * 1000
+
+	// audioPacketDuration := 20
+	// h.audioDts += uint64(audioPacketDuration * 1000)
+	// audioTimestamp := (uint64(h.audioDts) - uint64(h.startTime)) * uint64(h.audioClockRate)
+	// actualTimestamp := uint32((audioTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+	// // fmt.Printf("AUDIO: startTime=%d audioDts=%d audioTimestamp=%d actualTimestamp=%d\n", h.startTime, h.audioDts, audioTimestamp, actualTimestamp)
+	// fmt.Printf("Audio DTS Diff: %d\n", uint32(actualTimestamp)-h.lastAudioTimestamp)
+	// h.lastAudioTimestamp = uint32(actualTimestamp)
+	// // audioTimestamp := (time.Now().Unix() - h.startTime) * int64(h.audioClockRate)
+	// // actualTimestamp := uint32(audioTimestamp+USEC_IN_SEC/2) / USEC_IN_SEC
+
+	// dtsUsec := uint64(usecTimestamp())
+	// myTimestamp := ((dtsUsec - h.startDtsUsec) * (uint64(h.audioClockRate)))
+	// finalTimestamp := uint32((myTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	blockSize := 960
+	for h.audioBuffer = append(h.audioBuffer, pcm...); len(h.audioBuffer) >= blockSize*4; h.audioBuffer = h.audioBuffer[blockSize*4:] {
+		pcm16 := make([]int16, blockSize*2)
+		for i := 0; i < len(pcm16); i++ {
+			pcm16[i] = int16(binary.LittleEndian.Uint16(h.audioBuffer[i*2:]))
+		}
+		bufferSize := 1024
+		opusData := make([]byte, bufferSize)
+		n, err := h.audioEncoder.Encode(pcm16, opusData)
+		if err != nil {
+			return err
+		}
+		opusOutput := opusData[:n]
+
+		packets := h.audioPacketizer.Packetize(opusOutput, uint32(blockSize))
+
+		for _, p := range packets {
+			// h.log.Info("ASeq=", p.SequenceNumber)
+			// h.log.Info("A=", actualTimestamp)
+			// p.Header.Timestamp = uint32(actualTimestamp)
+			// p.Header.Timestamp = finalTimestamp
+			// p.Timestamp = h.lastAudioTimestamp
+			if err := h.stream.WriteRTP(p); err != nil {
+				h.log.Error(err)
+				return err
+			}
+		}
+		// h.audioTimestamp = h.audioTimestamp + uint32(blockSize)
+	}
+
+	h.lastAudioTimestamp += 960
+	return nil
 }
 
 // GStreamer -- AudioData: {SoundFormat:7 SoundRate:0 SoundSize:1 SoundType:0 AACPacketType:0 Data:0x1400022c2a0}
@@ -230,6 +306,7 @@ const (
 )
 
 func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
+	// h.log.Info("OV=", timestamp)
 	var video flvtag.VideoData
 	if err := flvtag.DecodeVideoData(payload, &video); err != nil {
 		return err
@@ -282,15 +359,64 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// https://github.com/pion/obs-wormhole/blob/master/internal/rtmp/rtmp.go
 
 	//start := time.Now()
+
+	// 2021-10-22 Luke Notes
+	// _update_timestamp in media.c has this code
+	// _update_timestmap is called in both media_send_video and media_send_audio
+	// 3 params: FTL stream configuration, media component (audio or video), and dts_usec
+	// dts_usec comes from anytime ftl_ingest_send_media_dts is called, in the first example
+	//   it comes from ftl_app/main.c which calls timeval_to_us(&frameTime)
+	// A note from FTL: In a real app these timestamps should come from the samples!
+
+	// uint64_t timeval_to_us(struct timeval *tv)
+	// {
+	//   return tv->tv_sec * (uint64_t)1000000 + tv->tv_usec;
+	// }
+
+	// fpsDen := 1
+	// fpsNum := 30
+	// // if video.FrameType == flvtag.FrameTypeKeyFrame {
+	// dst_usec_f := float32(fpsDen)*1000000.0/float32(fpsNum) + h.videoDtsError
+	// dts_increment_usec := uint64(dst_usec_f)
+	// h.videoDtsError = dst_usec_f - float32(dts_increment_usec)
+	// // fmt.Println("Adding ", dts_increment_usec)
+	// h.videoDts = h.videoDts + dts_increment_usec
+	// // }
+
+	// videoTimestamp := (uint64(h.videoDts) - uint64(h.startTime)) * uint64(h.videoClockRate)
+	// actualTimestamp := uint32((videoTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	// dtsUsec := uint64(usecTimestamp())
+	// myTimestamp := ((dtsUsec - h.startDtsUsec) * (uint64(h.videoClockRate)))
+	// finalTimestamp := uint32((myTimestamp + USEC_IN_SEC/2) / USEC_IN_SEC)
+
+	// fmt.Printf("Video DTS Diff: %d\n", uint32(actualTimestamp)-h.lastVideoTimestamp)
+	// h.lastVideoTimestamp = uint32(actualTimestamp)
+
+	// fmt.Printf("VIDEO: startTime=%d videoDts=%d dst_usec_f=%f dts_increment_usec=%d videoDtsError=%f videoTimestamp=%d actualTimestamp=%d\n", h.startTime, h.videoDts, dst_usec_f, dts_increment_usec, h.videoDtsError, videoTimestamp, actualTimestamp)
+
 	for _, p := range packets {
+		// h.log.Info("VSeq=", p.SequenceNumber)
+		// h.log.Info(p.String())
+		// p.Header.Timestamp = finalTimestamp
+		// p.Timestamp = h.lastVideoTimestamp
 		if err := h.stream.WriteRTP(p); err != nil {
+			h.log.Error(err)
 			return err
 		}
 	}
+	// h.log.Info("New Frame")
+
+	// h.lastVideoTimestamp += 3000
+
 	//elapsed := time.Since(start)
 	//h.log.Infof("WriteRTP's took %s for %d packets", elapsed, len(packets))
 
 	return nil
+}
+
+func usecTimestamp() int64 {
+	return time.Now().UnixNano() / int64(time.Microsecond)
 }
 
 //func (h *ConnHandler) appendNALHeader(video flvtag.VideoData, videoBuffer []byte) []byte {

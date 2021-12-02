@@ -7,7 +7,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/pion/rtp"
+	"github.com/pion/rtp/v2"
 	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media/h264writer"
 )
@@ -128,27 +128,27 @@ func (conn *MediaConnection) eternalRead() {
 		fmt.Printf("Error unmarshaling RTP packet %s\n", err)
 	}
 
-	// The FTL client actually tells us what PayloadType to use for these: VideoPayloadType & AudioPayloadType
-	if packet.Header.PayloadType == conn.VideoPayloadType {
-		log.Printf("Keyframe: %v\n", isKeyFrame(packet.Payload))
-		if err := conn.writer.WriteRTP(packet); err != nil {
-			panic(err)
-		}
+	// // The FTL client actually tells us what PayloadType to use for these: VideoPayloadType & AudioPayloadType
+	// if packet.Header.PayloadType == conn.VideoPayloadType {
+	// 	log.Printf("Keyframe: %v\n", isKeyFrame(packet.Payload))
+	// 	if err := conn.writer.WriteRTP(packet); err != nil {
+	// 		panic(err)
+	// 	}
 
-		if err := conn.videoTrack.WriteRTP(packet); err != nil {
-			fmt.Println("Error writing RTP to the video track: ", err)
-			conn.Close()
-			return
-		}
-		conn.readVideoBytes = conn.readVideoBytes + n
-	} else if packet.Header.PayloadType == conn.AudioPayloadType {
-		if err := conn.audioTrack.WriteRTP(packet); err != nil {
-			fmt.Println("Error writing RTP to the audio track: ", err)
-			conn.Close()
-			return
-		}
-		conn.readAudioBytes = conn.readAudioBytes + n
-	}
+	// 	if err := conn.videoTrack.WriteRTP(packet); err != nil {
+	// 		fmt.Println("Error writing RTP to the video track: ", err)
+	// 		conn.Close()
+	// 		return
+	// 	}
+	// 	conn.readVideoBytes = conn.readVideoBytes + n
+	// } else if packet.Header.PayloadType == conn.AudioPayloadType {
+	// 	if err := conn.audioTrack.WriteRTP(packet); err != nil {
+	// 		fmt.Println("Error writing RTP to the audio track: ", err)
+	// 		conn.Close()
+	// 		return
+	// 	}
+	// 	conn.readAudioBytes = conn.readAudioBytes + n
+	// }
 
 	conn.eternalRead()
 }
