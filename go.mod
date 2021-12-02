@@ -1,10 +1,11 @@
-module github.com/clone1018/rtmp-ingest
+module github.com/Glimesh/rtmp-ingest
 
 go 1.16
 
 require (
+	github.com/Glimesh/go-fdkaac v0.0.0-20210915201907-36688fb0387d
+	github.com/clone1018/rtmp-ingest v0.0.0-20210825140035-3a0139d24c29 // indirect
 	github.com/hasura/go-graphql-client v0.2.0
-	github.com/kentuckyfriedtakahe/go-fdkaac v0.0.0-20210915201907-36688fb0387d
 	github.com/pion/rtp/v2 v2.0.0
 	github.com/pion/webrtc/v3 v3.1.5
 	github.com/sirupsen/logrus v1.1.1

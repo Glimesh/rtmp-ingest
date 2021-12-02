@@ -219,8 +219,10 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 	if err != nil {
 		return err
 	}
-	_, err = stream.rtpWriter.ConcurrentWrite(buf)
-	return err
+	// This can error if the relay is removed in another thread, which is common because an edge will stop being a relay for a stream when there are no viewers on it.
+	// TODO: Figure out how to conditionally error from this.
+	_, _ = stream.rtpWriter.ConcurrentWrite(buf)
+	return nil
 }
 
 // AddStream adds a stream to the manager in an unauthenticated state

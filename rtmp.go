@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Glimesh/go-fdkaac/fdkaac"
 	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/kentuckyfriedtakahe/go-fdkaac/fdkaac"
 	"github.com/pion/rtp/v2"
 	"github.com/pion/rtp/v2/codecs"
 	"github.com/sirupsen/logrus"
@@ -152,14 +152,17 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	h.streamKey = []byte(auth[1])
 
 	if err := h.manager.NewStream(h.channelID); err != nil {
+		h.log.Error(err)
 		return err
 	}
 	if err := h.manager.Authenticate(h.channelID, h.streamKey); err != nil {
+		h.log.Error(err)
 		return err
 	}
 
 	stream, err := h.manager.StartStream(h.channelID)
 	if err != nil {
+		h.log.Error(err)
 		return err
 	}
 
@@ -276,12 +279,13 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 		packets := h.audioPacketizer.Packetize(opusOutput, uint32(blockSize))
 
 		for _, p := range packets {
-			h.log.Info("ASeq=", p.SequenceNumber)
+			// h.log.Info("ASeq=", p.SequenceNumber)
 			// h.log.Info("A=", actualTimestamp)
 			// p.Header.Timestamp = uint32(actualTimestamp)
 			// p.Header.Timestamp = finalTimestamp
 			// p.Timestamp = h.lastAudioTimestamp
 			if err := h.stream.WriteRTP(p); err != nil {
+				h.log.Error(err)
 				return err
 			}
 		}
@@ -392,17 +396,18 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	// fmt.Printf("VIDEO: startTime=%d videoDts=%d dst_usec_f=%f dts_increment_usec=%d videoDtsError=%f videoTimestamp=%d actualTimestamp=%d\n", h.startTime, h.videoDts, dst_usec_f, dts_increment_usec, h.videoDtsError, videoTimestamp, actualTimestamp)
 
 	for _, p := range packets {
-		h.log.Info("VSeq=", p.SequenceNumber)
+		// h.log.Info("VSeq=", p.SequenceNumber)
 		// h.log.Info(p.String())
 		// p.Header.Timestamp = finalTimestamp
 		// p.Timestamp = h.lastVideoTimestamp
 		if err := h.stream.WriteRTP(p); err != nil {
+			h.log.Error(err)
 			return err
 		}
 	}
-	h.log.Info("New Frame")
+	// h.log.Info("New Frame")
 
-	h.lastVideoTimestamp += 3000
+	// h.lastVideoTimestamp += 3000
 
 	//elapsed := time.Since(start)
 	//h.log.Infof("WriteRTP's took %s for %d packets", elapsed, len(packets))
