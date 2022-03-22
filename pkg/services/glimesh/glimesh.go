@@ -3,11 +3,12 @@ package glimesh
 import (
 	"context"
 	"fmt"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/clone1018/rtmp-ingest/pkg/services"
+	"strconv"
+
+	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/Glimesh/rtmp-ingest/pkg/services"
 	"github.com/hasura/go-graphql-client"
 	"golang.org/x/oauth2/clientcredentials"
-	"strconv"
 )
 
 type Service struct {

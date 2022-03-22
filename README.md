@@ -1,5 +1,5 @@
 # RTMP Ingest
-[![Go Report Card](https://goreportcard.com/badge/github.com/clone1018/rtmp-ingest)](https://goreportcard.com/report/github.com/clone1018/rtmp-ingest)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Glimesh/rtmp-ingest)](https://goreportcard.com/report/github.com/Glimesh/rtmp-ingest)
 
 Experimental RTMP ingest for Glimesh.tv
 

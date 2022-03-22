@@ -1,6 +1,6 @@
 package services
 
-import "github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+import "github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 
 type Service interface {
 	// Name of the service, eg: Glimesh

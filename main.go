@@ -6,10 +6,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 
-	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
-	"github.com/clone1018/rtmp-ingest/pkg/services/glimesh"
+	"github.com/Glimesh/rtmp-ingest/pkg/orchestrator"
+	"github.com/Glimesh/rtmp-ingest/pkg/services/glimesh"
 
 	"github.com/sirupsen/logrus"
 )

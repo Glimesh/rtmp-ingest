@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/clone1018/rtmp-ingest/pkg/orchestrator"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
-	"github.com/clone1018/rtmp-ingest/pkg/services"
+	"github.com/Glimesh/rtmp-ingest/pkg/orchestrator"
+	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/Glimesh/rtmp-ingest/pkg/services"
 	"github.com/pion/rtp/v2"
 )
 

@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/Glimesh/go-fdkaac/fdkaac"
-	"github.com/clone1018/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/pion/rtp/v2"
 	"github.com/pion/rtp/v2/codecs"
 	"github.com/sirupsen/logrus"
