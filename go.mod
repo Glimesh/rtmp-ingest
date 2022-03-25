@@ -3,7 +3,7 @@ module github.com/Glimesh/rtmp-ingest
 go 1.16
 
 require (
-	github.com/Glimesh/go-fdkaac v0.0.0-20210915201907-36688fb0387d
+	github.com/Glimesh/go-fdkaac v0.0.0-20220325160929-2f6b0a53a22a
 	github.com/hasura/go-graphql-client v0.2.0
 	github.com/pion/rtp/v2 v2.0.0
 	github.com/pion/webrtc/v3 v3.1.5

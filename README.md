@@ -7,7 +7,7 @@ Converts RTMP input into RTP packets, and then works with the Orchestrator to ge
 
 **Using stunnel is required since Go does not support PSK based TLS auth.**
 
-## Building
+## General Usage
 ```shell
 go build
 
@@ -18,6 +18,11 @@ export RMTP_INGEST_GLIMESH_CLIENT_SECRET=some_client_secret
 export RTMP_INGEST_ORCHESTRATOR_ADDRESS=localhost:18085
 ./rtmp-ingest
 ```
+
+### macOS Development
+```
+brew install opusfile fdk-aac
+``
 
 ## Helpful GStreamer Commands
 **Moving Circle**
