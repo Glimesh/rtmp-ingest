@@ -16,7 +16,7 @@ type Service interface {
 	// UpdateStreamMetadata Updates the service with additional metadata about a stream
 	UpdateStreamMetadata(streamID ftl.StreamID, metadata StreamMetadata) error
 	// SendJpegPreviewImage Sends a JPEG preview image of a stream to the service
-	SendJpegPreviewImage(streamID ftl.StreamID) error
+	SendJpegPreviewImage(streamID ftl.StreamID, filename string) error
 }
 
 // TODO: Move outta here

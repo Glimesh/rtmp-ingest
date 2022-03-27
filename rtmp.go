@@ -6,13 +6,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Glimesh/go-fdkaac/fdkaac"
+	"github.com/Glimesh/rtmp-ingest/pkg/h264"
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/pion/rtp/v2"
 	"github.com/pion/rtp/v2/codecs"
@@ -77,8 +81,15 @@ type ConnHandler struct {
 	videoClockRate  uint32
 	audioClockRate  uint32
 
+	keyframes       int
 	lastKeyFrames   int
 	lastInterFrames int
+
+	lastPartialFrame bytes.Buffer
+	lastFullFrame    []byte
+
+	lastPartialPackets []*rtp.Packet
+	lastFullPacket     []*rtp.Packet
 
 	sps []byte
 	pps []byte
@@ -87,6 +98,8 @@ type ConnHandler struct {
 	audioDecoder *fdkaac.AacDecoder
 	audioBuffer  []byte
 	audioEncoder *opus.Encoder
+
+	writer *h264.H264Writer
 
 	// Metadata
 	startTime           int64
@@ -104,6 +117,8 @@ type ConnHandler struct {
 	// Wont be able to get these until we can decode the h264 packets.
 	videoHeight int
 	videoWidth  int
+
+	lastOutBuf bytes.Buffer
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -140,6 +155,7 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	u64, err := strconv.ParseUint(auth[0], 10, 32)
 
 	if err != nil {
+		h.log.Error(err)
 		return err
 	}
 	h.channelID = ftl.ChannelID(u64)
@@ -289,6 +305,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	switch video.FrameType {
 	case flvtag.FrameTypeKeyFrame:
 		h.lastKeyFrames += 1
+		h.keyframes += 1
 	case flvtag.FrameTypeInterFrame:
 		h.lastInterFrames += 1
 	default:
@@ -306,15 +323,68 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	samples := uint32(len(outBuf)) + h.videoClockRate
 	packets := h.videoPacketizer.Packetize(outBuf, samples)
 
+	h.lastOutBuf.Write(outBuf)
+
+	// img, err := h.h264dec.Decode(outBuf)
+	// if err != nil {
+	// 	return err
+	// }
+
+	// if img != nil {
+	// 	h.log.Info("Saving screenshot")
+	// 	saveToFile(img)
+	// }
+
 	for _, p := range packets {
 		h.videoPackets++
 		if err := h.stream.WriteRTP(p); err != nil {
 			h.log.Error(err)
 			return err
 		}
+
+		// h.h264dec.Decode(h.sps)
+		// h.h264dec.Decode(h.pps)
+
+		// Technically this needs to capture the current frame
+		// if isKeyFrame(p.Payload) {
+		// 	if h.lastPartialFrame.Len() > 0 {
+		// 		h.lastFullFrame = h.lastPartialFrame.Bytes()
+		// 		h.lastFullPacket = h.lastPartialPackets
+		// 		h.lastPartialFrame.Truncate(0)
+		// 		h.lastPartialPackets = make([]*rtp.Packet, 0)
+		// 		h.log.Info("Got a new keyframe packet")
+		// 	}
+		// 	// h.frameBuf = make([]*rtp.Packet, 0)
+		// }
+		// h.lastPartialFrame.Write(p.Payload)
+		// h.lastPartialPackets = append(h.lastPartialPackets, p)
 	}
 
 	return nil
+}
+
+func isKeyFrame(data []byte) bool {
+	const (
+		typeSTAPA       = 24
+		typeSPS         = 7
+		naluTypeBitmask = 0x1F
+	)
+
+	var word uint32
+
+	payload := bytes.NewReader(data)
+	if err := binary.Read(payload, binary.BigEndian, &word); err != nil {
+		return false
+	}
+
+	naluType := (word >> 24) & naluTypeBitmask
+	if naluType == typeSTAPA && word&naluTypeBitmask == typeSPS {
+		return true
+	} else if naluType == typeSPS {
+		return true
+	}
+
+	return false
 }
 
 func (h *ConnHandler) appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) []byte {
@@ -407,18 +477,71 @@ func (h *ConnHandler) setupMetadataCollector() {
 				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
 
 				// Calculate some of our last fields
-				h.audioBps = 
-
+				h.audioBps = 0
 
 				h.lastVideoPackets = h.videoPackets
 				h.lastKeyFrames = 0
 				h.lastInterFrames = 0
+
+				// Thumbnail generation
+				// https://github.com/gen2brain/x264-go/blob/master/examples/screengrab/screengrab.go
+
+				// This code is still buggy as hell, I suspect we're corrupting h.lastOutBuf data since we truncate
+				// it outside of the main thread.
+				h264dec, err := h264.NewH264Decoder()
+				defer h264dec.Close()
+				if err != nil {
+					h.log.Error(err)
+					return
+				}
+				img, err := h264dec.Decode(h.lastOutBuf.Bytes())
+				if err != nil {
+					h.log.Error(err)
+					return
+				}
+				if img != nil {
+					// Since we have a thumbnail we can clear out the last out buf
+					h.lastOutBuf.Truncate(0)
+					// Seems dumb to be saving a file instead of just uploading the bytes
+					file, err := saveToFile(img)
+					if err != nil {
+						h.log.Error(err)
+					}
+
+					err = h.manager.service.SendJpegPreviewImage(h.streamID, file)
+					if err != nil {
+						h.log.Error(err)
+					}
+
+					os.Remove(file)
+				}
+
 			case <-h.quitTimer:
 				ticker.Stop()
 				return
 			}
 		}
 	}()
+}
+
+func saveToFile(img image.Image) (string, error) {
+	// create file
+	file := strconv.FormatInt(time.Now().UnixNano()/int64(time.Millisecond), 10) + ".jpg"
+	f, err := os.Create(file)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	// convert to jpeg
+	err = jpeg.Encode(f, img, &jpeg.Options{
+		Quality: 75,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return file, nil
 }
 
 func annexBPrefix() []byte {

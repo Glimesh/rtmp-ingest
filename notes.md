@@ -1,6 +1,10 @@
 # Various Notes
 Apparently, developing RTMP => FTL is at least slightly complicated. These notes are a scattered collection of failures that might be useful in the future.
 
+## mpeg notes
+Seems like a useful resource: 
+https://github.com/aler9/gortsplib/blob/0e8c93c5c2eaf7d58648998c29e221882ea5207a/examples/client-read-h264-save-to-disk/mpegtsencoder.go
+
 ## OnVideo Notes
 
 ### Simple NAL Header
