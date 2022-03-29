@@ -60,20 +60,27 @@ func main() {
 	if err := orch.Connect(orchTransport); err != nil {
 		log.Fatal(err)
 	}
-	closeHandler(orch)
 
 	streamManager = NewStreamManager(orch, glimeshService)
+
+	closeHandler(orch, streamManager)
 
 	// Blocking call to start the RTMP server
 	NewRTMPServer(streamManager, log.WithFields(logrus.Fields{"app": "rtmp"}))
 }
 
-func closeHandler(orch orchestrator.Client) {
-	c := make(chan os.Signal)
+func closeHandler(orch orchestrator.Client, streamManager StreamManager) {
+	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		<-c
 
+		// Stop all streams we're handling
+		for k := range streamManager.streams {
+			streamManager.StopStream(k)
+		}
+
+		// Tell orchestrator goodbye for now
 		orch.Close()
 
 		os.Exit(0)

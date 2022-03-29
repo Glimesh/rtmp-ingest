@@ -1,8 +1,11 @@
 package glimesh
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"mime/multipart"
+	"net/http"
 	"strconv"
 
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
@@ -15,8 +18,9 @@ type Service struct {
 	tokenUrl string
 	apiUrl   string
 
-	client *graphql.Client
-	config *Config
+	client     *graphql.Client
+	httpClient *http.Client
+	config     *Config
 }
 
 type Config struct {
@@ -44,8 +48,8 @@ func (s *Service) Connect() error {
 		TokenURL:     fmt.Sprintf("%s%s", s.config.Address, s.tokenUrl),
 		Scopes:       []string{"streamkey"},
 	}
-	httpClient := config.Client(context.Background())
-	s.client = graphql.NewClient(fmt.Sprintf("%s%s", s.config.Address, s.apiUrl), httpClient)
+	s.httpClient = config.Client(context.Background())
+	s.client = graphql.NewClient(fmt.Sprintf("%s%s", s.config.Address, s.apiUrl), s.httpClient)
 
 	return nil
 }
@@ -86,13 +90,61 @@ func (s *Service) StartStream(channelID ftl.ChannelID) (ftl.StreamID, error) {
 }
 
 func (s *Service) EndStream(streamID ftl.StreamID) error {
-	return nil
+	var endStreamMutation struct {
+		Stream struct {
+			Id graphql.String
+		} `graphql:"endStream(streamId: $id)"`
+	}
+	return s.client.Mutate(context.Background(), &endStreamMutation, map[string]interface{}{
+		"id": graphql.ID(streamID),
+	})
 }
 
 func (s *Service) UpdateStreamMetadata(streamID ftl.StreamID, metadata services.StreamMetadata) error {
 	return nil
 }
 
-func (s *Service) SendJpegPreviewImage(streamID ftl.StreamID) error {
+func (s *Service) SendJpegPreviewImage(streamID ftl.StreamID, img []byte) error {
+	// Unfortunately hasura doesn't support this directly so we need to do a plain HTTP request
+	query := `mutation {
+		uploadStreamThumbnail(streamId: %d, thumbnail: "thumbdata") {
+			id
+		}
+	}`
+
+	return uploadThumbnail(s.httpClient, fmt.Sprintf("%s%s", s.config.Address, s.apiUrl), fmt.Sprintf(query, streamID), img)
+}
+
+func uploadThumbnail(client *http.Client, url string, query string, image []byte) error {
+	body := new(bytes.Buffer)
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("thumbdata", "thumbnail.jpg")
+	if err != nil {
+		return err
+	}
+	part.Write(image)
+
+	writer.WriteField("query", query)
+	err = writer.Close()
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		return err
+	}
+	// Don't forget to set the content type, this will contain the boundary.
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Submit the request
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("bad status: %s", res.Status)
+	}
+
 	return nil
 }

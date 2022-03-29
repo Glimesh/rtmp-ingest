@@ -122,6 +122,7 @@ func splitOrchestratorMessages(data []byte, atEOF bool) (advance int, token []by
 }
 
 func (client *Client) Close() error {
+	client.logger.Info("Sending Outro Message to Orchestrator")
 	if !client.connected {
 		// Already closed
 		return nil

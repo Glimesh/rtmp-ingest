@@ -11,9 +11,9 @@ Converts RTMP input into RTP packets, and then works with the Orchestrator to ge
 ```shell
 go build
 
-export RMTP_INGEST_GLIMESH_ADDRESS=https://glimesh.tv
-export RMTP_INGEST_GLIMESH_CLIENT_ID=some_client_id
-export RMTP_INGEST_GLIMESH_CLIENT_SECRET=some_client_secret
+export RTMP_INGEST_GLIMESH_ADDRESS=https://glimesh.tv
+export RTMP_INGEST_GLIMESH_CLIENT_ID=some_client_id
+export RTMP_INGEST_GLIMESH_CLIENT_SECRET=some_client_secret
 # Assumes a stunnel connection setup with proper PSK to orchestrator
 export RTMP_INGEST_ORCHESTRATOR_ADDRESS=localhost:18085
 ./rtmp-ingest
