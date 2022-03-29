@@ -10,7 +10,6 @@ import (
 	"image/jpeg"
 	"io"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -44,9 +43,9 @@ func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
 		OnConnect: func(conn net.Conn) (io.ReadWriteCloser, *rtmp.ConnConfig) {
 			return conn, &rtmp.ConnConfig{
 				Handler: &ConnHandler{
-					manager:   streamManager,
-					log:       log,
-					quitTimer: make(chan bool, 1),
+					manager:                streamManager,
+					log:                    log,
+					stopMetadataCollection: make(chan bool, 1),
 				},
 
 				ControlState: rtmp.StreamControlStateConfig{
@@ -74,32 +73,25 @@ type ConnHandler struct {
 
 	stream *Stream
 
-	audioSequencer  rtp.Sequencer
 	videoSequencer  rtp.Sequencer
 	videoPacketizer rtp.Packetizer
-	audioPacketizer rtp.Packetizer
 	videoClockRate  uint32
+
+	audioSequencer  rtp.Sequencer
+	audioPacketizer rtp.Packetizer
 	audioClockRate  uint32
+	audioDecoder    *fdkaac.AacDecoder
+	audioBuffer     []byte
+	audioEncoder    *opus.Encoder
 
 	keyframes       int
 	lastKeyFrames   int
 	lastInterFrames int
 
-	lastPartialFrame bytes.Buffer
-	lastFullFrame    []byte
-
-	lastPartialPackets []*rtp.Packet
-	lastFullPacket     []*rtp.Packet
-
 	sps []byte
 	pps []byte
 
-	quitTimer    chan bool
-	audioDecoder *fdkaac.AacDecoder
-	audioBuffer  []byte
-	audioEncoder *opus.Encoder
-
-	writer *h264.H264Writer
+	stopMetadataCollection chan bool
 
 	// Metadata
 	startTime           int64
@@ -114,11 +106,10 @@ type ConnHandler struct {
 	clientVendorVersion string
 	videoCodec          string
 	audioCodec          string
-	// Wont be able to get these until we can decode the h264 packets.
-	videoHeight int
-	videoWidth  int
+	videoHeight         int
+	videoWidth          int
 
-	lastOutBuf bytes.Buffer
+	lastOutBuf [][]byte
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -133,8 +124,6 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 	h.audioClockRate = 48000
 
 	h.startTime = time.Now().Unix()
-
-	// h.ctx = avformat.AvformatAllocContext()
 
 	return nil
 }
@@ -186,9 +175,10 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	})
 
 	h.authenticated = true
-	h.videoSequencer = rtp.NewFixedSequencer(25000)
-	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, h.videoClockRate)
 
+	if err := h.initVideo(h.videoClockRate); err != nil {
+		return err
+	}
 	if err := h.initAudio(h.audioClockRate); err != nil {
 		return err
 	}
@@ -198,7 +188,12 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 	return nil
 }
 
-const USEC_IN_SEC = 1000000
+func (h *ConnHandler) initVideo(clockRate uint32) (err error) {
+	h.videoSequencer = rtp.NewFixedSequencer(25000)
+	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
+
+	return nil
+}
 
 func (h *ConnHandler) initAudio(clockRate uint32) (err error) {
 	h.audioSequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
@@ -216,7 +211,7 @@ func (h *ConnHandler) initAudio(clockRate uint32) (err error) {
 func (h *ConnHandler) OnClose() {
 	h.log.Info("OnClose")
 
-	h.quitTimer <- true
+	h.stopMetadataCollection <- true
 
 	if err := h.manager.StopStream(h.channelID); err != nil {
 		panic(err)
@@ -317,23 +312,12 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 		return err
 	}
 
-	outBuf := h.appendNALHeaderSpecial(video, data.Bytes())
+	var outBuf []byte
+	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data.Bytes())
 
 	// Likely there's more than one set of RTP packets in this read
 	samples := uint32(len(outBuf)) + h.videoClockRate
 	packets := h.videoPacketizer.Packetize(outBuf, samples)
-
-	h.lastOutBuf.Write(outBuf)
-
-	// img, err := h.h264dec.Decode(outBuf)
-	// if err != nil {
-	// 	return err
-	// }
-
-	// if img != nil {
-	// 	h.log.Info("Saving screenshot")
-	// 	saveToFile(img)
-	// }
 
 	for _, p := range packets {
 		h.videoPackets++
@@ -341,123 +325,12 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 			h.log.Error(err)
 			return err
 		}
-
-		// h.h264dec.Decode(h.sps)
-		// h.h264dec.Decode(h.pps)
-
-		// Technically this needs to capture the current frame
-		// if isKeyFrame(p.Payload) {
-		// 	if h.lastPartialFrame.Len() > 0 {
-		// 		h.lastFullFrame = h.lastPartialFrame.Bytes()
-		// 		h.lastFullPacket = h.lastPartialPackets
-		// 		h.lastPartialFrame.Truncate(0)
-		// 		h.lastPartialPackets = make([]*rtp.Packet, 0)
-		// 		h.log.Info("Got a new keyframe packet")
-		// 	}
-		// 	// h.frameBuf = make([]*rtp.Packet, 0)
-		// }
-		// h.lastPartialFrame.Write(p.Payload)
-		// h.lastPartialPackets = append(h.lastPartialPackets, p)
 	}
+
+	// Save some of the buffer for generating thumbnails
+	h.lastOutBuf = append(h.lastOutBuf, outBuf)
 
 	return nil
-}
-
-func isKeyFrame(data []byte) bool {
-	const (
-		typeSTAPA       = 24
-		typeSPS         = 7
-		naluTypeBitmask = 0x1F
-	)
-
-	var word uint32
-
-	payload := bytes.NewReader(data)
-	if err := binary.Read(payload, binary.BigEndian, &word); err != nil {
-		return false
-	}
-
-	naluType := (word >> 24) & naluTypeBitmask
-	if naluType == typeSTAPA && word&naluTypeBitmask == typeSPS {
-		return true
-	} else if naluType == typeSPS {
-		return true
-	}
-
-	return false
-}
-
-func (h *ConnHandler) appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) []byte {
-	const (
-		headerLengthField = 4
-		spsId             = 0x67
-		ppsId             = 0x68
-	)
-
-	hasSpsPps := false
-	var outBuf []byte
-
-	if video.AVCPacketType == flvtag.AVCPacketTypeNALU {
-		for offset := 0; offset < len(videoBuffer); {
-
-			bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
-			if offset+bufferLength >= len(videoBuffer) {
-				break
-			}
-
-			offset += headerLengthField
-
-			if videoBuffer[offset] == spsId {
-				hasSpsPps = true
-				h.sps = append(annexBPrefix(), videoBuffer[offset:offset+bufferLength]...)
-			} else if videoBuffer[offset] == ppsId {
-				hasSpsPps = true
-				h.pps = append(annexBPrefix(), videoBuffer[offset:offset+bufferLength]...)
-			}
-
-			outBuf = append(outBuf, annexBPrefix()...)
-			outBuf = append(outBuf, videoBuffer[offset:offset+bufferLength]...)
-
-			offset += bufferLength
-		}
-	} else if video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader {
-		const spsCountOffset = 5
-		spsCount := videoBuffer[spsCountOffset] & 0x1F
-		offset := 6
-		h.sps = []byte{}
-		for i := 0; i < int(spsCount); i++ {
-			spsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
-			offset += 2
-			if videoBuffer[offset] != spsId {
-				// panic("Failed to parse SPS")
-				return []byte{}
-			}
-			h.sps = append(h.sps, annexBPrefix()...)
-			h.sps = append(h.sps, videoBuffer[offset:offset+int(spsLen)]...)
-			offset += int(spsLen)
-		}
-		ppsCount := videoBuffer[offset]
-		offset++
-		for i := 0; i < int(ppsCount); i++ {
-			ppsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
-			offset += 2
-			if videoBuffer[offset] != ppsId {
-				// panic("Failed to parse PPS")
-				return []byte{}
-			}
-			h.sps = append(h.sps, annexBPrefix()...)
-			h.sps = append(h.sps, videoBuffer[offset:offset+int(ppsLen)]...)
-			offset += int(ppsLen)
-		}
-		return nil
-	}
-
-	// We have an unadorned keyframe, append SPS/PPS
-	if video.FrameType == flvtag.FrameTypeKeyFrame && !hasSpsPps {
-		outBuf = append(append(h.sps, h.pps...), outBuf...)
-	}
-
-	return outBuf
 }
 
 func (h *ConnHandler) setupMetadataCollector() {
@@ -488,62 +361,50 @@ func (h *ConnHandler) setupMetadataCollector() {
 
 				// This code is still buggy as hell, I suspect we're corrupting h.lastOutBuf data since we truncate
 				// it outside of the main thread.
+				var img image.Image
 				h264dec, err := h264.NewH264Decoder()
 				defer h264dec.Close()
 				if err != nil {
 					h.log.Error(err)
 					return
 				}
-				img, err := h264dec.Decode(h.lastOutBuf.Bytes())
-				if err != nil {
-					h.log.Error(err)
-					return
+				for _, buf := range h.lastOutBuf {
+					img, err = h264dec.Decode(buf)
+					if err != nil {
+						h.log.Error(err)
+						return
+					}
 				}
+
 				if img != nil {
 					// Since we have a thumbnail we can clear out the last out buf
-					h.lastOutBuf.Truncate(0)
+					// h.lastOutBuf.Reset()
+					h.lastOutBuf = make([][]byte, 0)
+
 					// Seems dumb to be saving a file instead of just uploading the bytes
-					file, err := saveToFile(img)
+					buff := new(bytes.Buffer)
+					err = jpeg.Encode(buff, img, &jpeg.Options{
+						Quality: 75,
+					})
+					if err != nil {
+						h.log.Error(err)
+						return
+					}
+
+					err = h.manager.service.SendJpegPreviewImage(h.streamID, buff.Bytes())
 					if err != nil {
 						h.log.Error(err)
 					}
 
-					err = h.manager.service.SendJpegPreviewImage(h.streamID, file)
-					if err != nil {
-						h.log.Error(err)
-					}
-
-					os.Remove(file)
+					// Also update our metadata
+					h.videoWidth = img.Bounds().Dx()
+					h.videoHeight = img.Bounds().Dy()
 				}
 
-			case <-h.quitTimer:
+			case <-h.stopMetadataCollection:
 				ticker.Stop()
 				return
 			}
 		}
 	}()
-}
-
-func saveToFile(img image.Image) (string, error) {
-	// create file
-	file := strconv.FormatInt(time.Now().UnixNano()/int64(time.Millisecond), 10) + ".jpg"
-	f, err := os.Create(file)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	// convert to jpeg
-	err = jpeg.Encode(f, img, &jpeg.Options{
-		Quality: 75,
-	})
-	if err != nil {
-		return "", err
-	}
-
-	return file, nil
-}
-
-func annexBPrefix() []byte {
-	return []byte{0x00, 0x00, 0x00, 0x01}
 }

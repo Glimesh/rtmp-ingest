@@ -5,6 +5,14 @@ Apparently, developing RTMP => FTL is at least slightly complicated. These notes
 Seems like a useful resource: 
 https://github.com/aler9/gortsplib/blob/0e8c93c5c2eaf7d58648998c29e221882ea5207a/examples/client-read-h264-save-to-disk/mpegtsencoder.go
 
+## various similar go projects
+https://github.com/aler9/gortsplib/blob/0e8c93c5c2eaf7d58648998c29e221882ea5207a/pkg/rtph264/decoder.go#L41
+https://github.com/imkira/go-libav/blob/6bf952df9de5175eacc13046ee996138d035e56f/avcodec/avcodec33.go
+https://github.com/bealemm/codec
+https://github.com/KimJeongChul/nvpipe/tree/8a77d654726c95c95e9eae18d7befc5a485cd9a9
+https://github.com/gen2brain/x264-go/blob/master/encode_test.go
+https://github.com/pion/webrtc/blob/master/examples/save-to-disk/main.go
+
 ## OnVideo Notes
 
 ### Simple NAL Header

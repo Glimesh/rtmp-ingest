@@ -70,7 +70,7 @@ func main() {
 }
 
 func closeHandler(orch orchestrator.Client, streamManager StreamManager) {
-	c := make(chan os.Signal)
+	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	go func() {
 		<-c
