@@ -142,6 +142,8 @@ func uploadThumbnail(client *http.Client, url string, query string, image []byte
 	if err != nil {
 		return err
 	}
+	defer res.Body.Close()
+
 	if res.StatusCode != http.StatusOK {
 		return fmt.Errorf("bad status: %s", res.Status)
 	}
