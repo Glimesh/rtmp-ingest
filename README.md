@@ -24,6 +24,11 @@ export RTMP_INGEST_ORCHESTRATOR_ADDRESS=localhost:18085
 brew install opusfile fdk-aac
 ```
 
+### Ubuntu / Linux Development
+```
+apt install -y pkg-config build-essential libopusfile-dev libfdk-aac-dev libavutil-dev libavcodec-dev libswscale-dev
+```
+
 ## Helpful GStreamer Commands
 **Moving Circle**
 ```shell
