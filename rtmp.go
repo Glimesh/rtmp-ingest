@@ -395,6 +395,7 @@ func (h *ConnHandler) setupMetadataCollector() {
 					if err != nil {
 						h.log.Error(err)
 					}
+					buff.Reset()
 
 					// Also update our metadata
 					h.videoWidth = img.Bounds().Dx()

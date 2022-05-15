@@ -57,7 +57,8 @@ func NewH264Decoder() (*H264Decoder, error) {
 	}
 
 	avPacket := C.AVPacket{}
-	C.av_init_packet(&avPacket)
+	// Deprecated https://www.mail-archive.com/ffmpeg-devel@ffmpeg.org/msg115189.html
+	// C.av_init_packet(&avPacket)
 
 	return &H264Decoder{
 		codecCtx: codecCtx,
@@ -81,7 +82,7 @@ func (d *H264Decoder) Close() {
 }
 
 func (d *H264Decoder) Decode(nalu []byte) (image.Image, error) {
-	nalu = append([]uint8{0x00, 0x00, 0x00, 0x01}, []uint8(nalu)...)
+	// nalu = append([]uint8{0x00, 0x00, 0x00, 0x01}, []uint8(nalu)...)
 
 	// send frame to decoder
 	d.avPacket.data = (*C.uint8_t)(C.CBytes(nalu))

@@ -33,8 +33,6 @@ cloud.google.com/go/storage v1.10.0/go.mod h1:FLPqc6j+Ki4BU591ie1oL6qBQGu2Bl/tZ9
 dmitri.shuralyov.com/gpu/mtl v0.0.0-20190408044501-666a987793e9/go.mod h1:H6x//7gZCb22OMCxBHrMx7a5I7Hp++hsVxbQ4BYO7hU=
 github.com/BurntSushi/toml v0.3.1/go.mod h1:xHWCNGjB5oqiDr8zfno3MHue2Ht5sIBksp03qcyfWMU=
 github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802/go.mod h1:IVnqGOEym/WlBOVXweHU+Q+/VP0lqqI8lqeDx9IjBqo=
-github.com/Glimesh/go-fdkaac v0.0.0-20210915201907-36688fb0387d h1:6CE4EKwyqwVWyyK1PaRIvViHXysvUJ6nHb8dlcdmQHs=
-github.com/Glimesh/go-fdkaac v0.0.0-20210915201907-36688fb0387d/go.mod h1:fMW6Sy1+J9bYs2uH3zM/CburHQ28j74258DBCgOcDko=
 github.com/Glimesh/go-fdkaac v0.0.0-20220325160929-2f6b0a53a22a h1:KLHAFbjWd6MjrM1gw3KmFBX23O/27yso8vcfcanKEAc=
 github.com/Glimesh/go-fdkaac v0.0.0-20220325160929-2f6b0a53a22a/go.mod h1:EKp34oLIwEAKG/EYPeDKmUFZBTIqw/Q/NLvFVss3+EQ=
 github.com/aler9/gortsplib v0.0.0-20220324142719-7d9c882cc95b h1:tUbz82mIgMWTVI0pKZGHoL//c+y0VVGIMPHdYeAyvdc=
@@ -58,11 +56,8 @@ github.com/fortytw2/leaktest v1.2.0 h1:cj6GCiwJDH7l3tMHLjZDo0QqPtrXJiWSI9JgpeQKw
 github.com/fortytw2/leaktest v1.2.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHquHwclZch5g=
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/fsnotify/fsnotify v1.4.9/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
-github.com/gen2brain/x264-go v0.2.0 h1:4rpAC+0gwjsiRryWYXe0/cYujNu10VAkw0QyRfTMKyE=
 github.com/gen2brain/x264-go v0.2.0/go.mod h1:X0UBuPKXLZLyijyuwegYhv54LHhCLvdcuPYSuXnBasM=
-github.com/gen2brain/x264-go/x264c v0.0.0-20211014010035-0051007e2ad5 h1:Ajgaf3KRuOZIQVJMdmIGoRD0v3+cB2QcV5BcLfdgT3I=
 github.com/gen2brain/x264-go/x264c v0.0.0-20211014010035-0051007e2ad5/go.mod h1:lshP4xmJNPCHscewcvsemVs62q8J8F0mh+FYBAfVG60=
-github.com/gen2brain/x264-go/yuv v0.0.0-20211014010035-0051007e2ad5 h1:hLLP8PrcDcy6+5LcPAIdyYza3S4KEHbzvNB+cvW/5gc=
 github.com/gen2brain/x264-go/yuv v0.0.0-20211014010035-0051007e2ad5/go.mod h1:xGOE/2fXjxu/ZONrm0EPqKHj/XDc13al1o48I3FQfHA=
 github.com/gin-contrib/sse v0.1.0 h1:Y/yl/+YNO8GZSjAhjMsSuLt29uWRFHdHYUb5lYOV9qE=
 github.com/gin-contrib/sse v0.1.0/go.mod h1:RHrZQHXnP2xjPF+u1gW/2HnVO7nvIa9PG3Gm+fLHvGI=
@@ -203,7 +198,6 @@ github.com/pion/mdns v0.0.5/go.mod h1:UgssrvdD3mxpi8tMxAXbsppL3vJ4Jipw1mTCW+al01
 github.com/pion/randutil v0.1.0 h1:CFG1UdESneORglEsnimhUjf33Rwjubwj6xfiOXBa3mA=
 github.com/pion/randutil v0.1.0/go.mod h1:XcJrSMMbbMRhASFVOlj/5hQial/Y8oH/HVo7TBZq+j8=
 github.com/pion/rtcp v1.2.6/go.mod h1:52rMNPWFsjr39z9B9MhnkqhPLoeHTv1aN63o/42bWE0=
-github.com/pion/rtcp v1.2.8 h1:Cys8X6r0xxU65ESTmXkqr8eU1Q1Wx+lNkoZCUH4zD7E=
 github.com/pion/rtcp v1.2.8/go.mod h1:qVPhiCzAm4D/rxb6XzKeyZiQK69yJpbUDJSF7TgrqNo=
 github.com/pion/rtcp v1.2.9 h1:1ujStwg++IOLIEoOiIQ2s+qBuJ1VN81KW+9pMPsif+U=
 github.com/pion/rtcp v1.2.9/go.mod h1:qVPhiCzAm4D/rxb6XzKeyZiQK69yJpbUDJSF7TgrqNo=

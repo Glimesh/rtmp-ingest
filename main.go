@@ -11,6 +11,9 @@ import (
 	"github.com/Glimesh/rtmp-ingest/pkg/orchestrator"
 	"github.com/Glimesh/rtmp-ingest/pkg/services/glimesh"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -64,6 +67,10 @@ func main() {
 	streamManager = NewStreamManager(orch, glimeshService)
 
 	closeHandler(orch, streamManager)
+
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
 
 	// Blocking call to start the RTMP server
 	NewRTMPServer(streamManager, log.WithFields(logrus.Fields{"app": "rtmp"}))
