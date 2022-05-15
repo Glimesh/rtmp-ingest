@@ -219,11 +219,13 @@ func (h *ConnHandler) OnClose() {
 	h.stopMetadataCollection <- true
 
 	if err := h.manager.StopStream(h.channelID); err != nil {
-		panic(err)
+		h.log.Error(err)
+		// panic(err)
 	}
 
 	if err := h.manager.RemoveStream(h.channelID); err != nil {
-		panic(err)
+		h.log.Error(err)
+		// panic(err)
 	}
 
 	if h.audioDecoder != nil {
