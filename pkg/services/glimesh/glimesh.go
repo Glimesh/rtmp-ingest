@@ -100,8 +100,33 @@ func (s *Service) EndStream(streamID ftl.StreamID) error {
 	})
 }
 
+type StreamMetadataInput services.StreamMetadata
+
 func (s *Service) UpdateStreamMetadata(streamID ftl.StreamID, metadata services.StreamMetadata) error {
-	return nil
+	var logStreamMetadata struct {
+		Stream struct {
+			Id graphql.String
+		} `graphql:"logStreamMetadata(streamId: $id, metadata: $metadata)"`
+	}
+	return s.client.Mutate(context.Background(), &logStreamMetadata, map[string]interface{}{
+		"id": graphql.ID(streamID),
+		"metadata": StreamMetadataInput{
+			AudioCodec:        metadata.AudioCodec,
+			IngestServer:      metadata.IngestServer,
+			IngestViewers:     metadata.IngestViewers,
+			LostPackets:       metadata.LostPackets,
+			NackPackets:       metadata.NackPackets,
+			RecvPackets:       metadata.RecvPackets,
+			SourceBitrate:     metadata.SourceBitrate,
+			SourcePing:        metadata.SourcePing,
+			StreamTimeSeconds: metadata.StreamTimeSeconds,
+			VendorName:        metadata.VendorName,
+			VendorVersion:     metadata.VendorVersion,
+			VideoCodec:        metadata.VideoCodec,
+			VideoHeight:       metadata.VideoHeight,
+			VideoWidth:        metadata.VideoWidth,
+		},
+	})
 }
 
 func (s *Service) SendJpegPreviewImage(streamID ftl.StreamID, img []byte) error {

@@ -11,6 +11,8 @@ import (
 )
 
 type Client struct {
+	ClientHostname string
+
 	config    *Config
 	logger    logrus.FieldLogger
 	callbacks Callbacks
@@ -44,7 +46,8 @@ type Config struct {
 
 func NewClient(config Config) Client {
 	return Client{
-		config: &config,
+		ClientHostname: config.Hostname,
+		config:         &config,
 	}
 }
 

@@ -23,4 +23,18 @@ type Service interface {
 
 // TODO: Move outta here
 type StreamMetadata struct {
+	AudioCodec        string
+	IngestServer      string
+	IngestViewers     int
+	LostPackets       int
+	NackPackets       int
+	RecvPackets       int
+	SourceBitrate     int
+	SourcePing        int
+	StreamTimeSeconds int
+	VendorName        string
+	VendorVersion     string
+	VideoCodec        string
+	VideoHeight       int
+	VideoWidth        int
 }

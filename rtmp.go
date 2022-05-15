@@ -17,6 +17,7 @@ import (
 	"github.com/Glimesh/go-fdkaac/fdkaac"
 	"github.com/Glimesh/rtmp-ingest/pkg/h264"
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
+	"github.com/Glimesh/rtmp-ingest/pkg/services"
 	"github.com/pion/rtp/v2"
 	"github.com/pion/rtp/v2/codecs"
 	"github.com/sirupsen/logrus"
@@ -109,7 +110,7 @@ type ConnHandler struct {
 	videoHeight         int
 	videoWidth          int
 
-	lastOutBuf [][]byte
+	lastFullFrame []byte
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -124,6 +125,10 @@ func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConn
 	h.audioClockRate = 48000
 
 	h.startTime = time.Now().Unix()
+	h.audioCodec = "opus"
+	h.videoCodec = "H264"
+	h.videoHeight = 0
+	h.videoWidth = 0
 
 	return nil
 }
@@ -315,6 +320,11 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	var outBuf []byte
 	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data.Bytes())
 
+	if video.FrameType == flvtag.FrameTypeKeyFrame {
+		// Save the last full keyframe for anything we may need, eg thumbnails
+		h.lastFullFrame = outBuf
+	}
+
 	// Likely there's more than one set of RTP packets in this read
 	samples := uint32(len(outBuf)) + h.videoClockRate
 	packets := h.videoPacketizer.Packetize(outBuf, samples)
@@ -326,9 +336,6 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 			return err
 		}
 	}
-
-	// Save some of the buffer for generating thumbnails
-	h.lastOutBuf = append(h.lastOutBuf, outBuf)
 
 	return nil
 }
@@ -361,45 +368,60 @@ func (h *ConnHandler) setupMetadataCollector() {
 
 				// This code is still buggy as hell, I suspect we're corrupting h.lastOutBuf data since we truncate
 				// it outside of the main thread.
-				var img image.Image
-				h264dec, err := h264.NewH264Decoder()
-				defer h264dec.Close()
+				if len(h.lastFullFrame) > 0 {
+					var img image.Image
+					h264dec, err := h264.NewH264Decoder()
+					defer h264dec.Close()
+					if err != nil {
+						h.log.Error(err)
+						return
+					}
+					img, err = h264dec.Decode(h.lastFullFrame)
+					if err != nil {
+						h.log.Error(err)
+						return
+					}
+
+					if img != nil {
+						buff := new(bytes.Buffer)
+						err = jpeg.Encode(buff, img, &jpeg.Options{
+							Quality: 75,
+						})
+						if err != nil {
+							h.log.Error(err)
+							return
+						}
+
+						err = h.manager.service.SendJpegPreviewImage(h.streamID, buff.Bytes())
+						if err != nil {
+							h.log.Error(err)
+						}
+						buff.Reset()
+
+						// Also update our metadata
+						h.videoWidth = img.Bounds().Dx()
+						h.videoHeight = img.Bounds().Dy()
+					}
+				}
+
+				err := h.manager.service.UpdateStreamMetadata(h.streamID, services.StreamMetadata{
+					AudioCodec:        h.audioCodec,
+					IngestServer:      h.manager.orchestrator.ClientHostname,
+					IngestViewers:     0,
+					LostPackets:       0, // Don't exist
+					NackPackets:       0, // Don't exist
+					RecvPackets:       h.videoPackets + h.audioPackets,
+					SourceBitrate:     0, // Likely just need to calculate the bytes between two 5s snapshots?
+					SourcePing:        0, // Not accessible unless we ping them manually
+					StreamTimeSeconds: int(h.lastTime - h.startTime),
+					VendorName:        h.clientVendorName,
+					VendorVersion:     h.clientVendorVersion,
+					VideoCodec:        h.videoCodec,
+					VideoHeight:       h.videoHeight,
+					VideoWidth:        h.videoWidth,
+				})
 				if err != nil {
 					h.log.Error(err)
-					return
-				}
-				for _, buf := range h.lastOutBuf {
-					img, err = h264dec.Decode(buf)
-					if err != nil {
-						h.log.Error(err)
-						return
-					}
-				}
-
-				if img != nil {
-					// Since we have a thumbnail we can clear out the last out buf
-					// h.lastOutBuf.Reset()
-					h.lastOutBuf = make([][]byte, 0)
-
-					// Seems dumb to be saving a file instead of just uploading the bytes
-					buff := new(bytes.Buffer)
-					err = jpeg.Encode(buff, img, &jpeg.Options{
-						Quality: 75,
-					})
-					if err != nil {
-						h.log.Error(err)
-						return
-					}
-
-					err = h.manager.service.SendJpegPreviewImage(h.streamID, buff.Bytes())
-					if err != nil {
-						h.log.Error(err)
-					}
-					buff.Reset()
-
-					// Also update our metadata
-					h.videoWidth = img.Bounds().Dx()
-					h.videoHeight = img.Bounds().Dy()
 				}
 
 			case <-h.stopMetadataCollection:
