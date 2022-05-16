@@ -27,6 +27,12 @@ import (
 	opus "gopkg.in/hraban/opus.v2"
 )
 
+const (
+	FTL_MTU      = 1392
+	FTL_VIDEO_PT = 96
+	FTL_AUDIO_PT = 97
+)
+
 func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
 	log.Info("Starting RTMP Server on :1935")
 
@@ -195,14 +201,14 @@ func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish)
 
 func (h *ConnHandler) initVideo(clockRate uint32) (err error) {
 	h.videoSequencer = rtp.NewFixedSequencer(25000)
-	h.videoPacketizer = rtp.NewPacketizer(1392, 96, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
+	h.videoPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_VIDEO_PT, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
 
 	return nil
 }
 
 func (h *ConnHandler) initAudio(clockRate uint32) (err error) {
 	h.audioSequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
-	h.audioPacketizer = rtp.NewPacketizer(1392, 97, uint32(h.channelID), &codecs.OpusPayloader{}, h.audioSequencer, clockRate)
+	h.audioPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_AUDIO_PT, uint32(h.channelID), &codecs.OpusPayloader{}, h.audioSequencer, clockRate)
 
 	h.audioEncoder, err = opus.NewEncoder(int(clockRate), 2, opus.AppAudio)
 	if err != nil {
@@ -236,34 +242,31 @@ func (h *ConnHandler) OnClose() {
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 	// Convert AAC to opus
-	// https://github.com/notedit/rtc-rtmp - Has c bindings
-
 	var audio flvtag.AudioData
 	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
 		return err
 	}
 
-	data := new(bytes.Buffer)
-	if _, err := io.Copy(data, audio.Data); err != nil {
+	data, err := io.ReadAll(audio.Data)
+	if err != nil {
 		return err
 	}
-	bytes := data.Bytes()
 
 	if audio.AACPacketType == flvtag.AACPacketTypeSequenceHeader {
-		h.log.Infof("Created new codec %s", hex.EncodeToString(bytes))
-		err := h.audioDecoder.InitRaw(bytes)
+		h.log.Infof("Created new codec %s", hex.EncodeToString(data))
+		err := h.audioDecoder.InitRaw(data)
 
 		if err != nil {
 			h.log.WithError(err).Errorf("error initializing stream")
-			return fmt.Errorf("can't initialize codec with %s", hex.EncodeToString(bytes))
+			return fmt.Errorf("can't initialize codec with %s", hex.EncodeToString(data))
 		}
 
 		return nil
 	}
 
-	pcm, err := h.audioDecoder.Decode(bytes)
+	pcm, err := h.audioDecoder.Decode(data)
 	if err != nil {
-		h.log.Errorf("decode error: %s %s", hex.EncodeToString(bytes), err)
+		h.log.Errorf("decode error: %s %s", hex.EncodeToString(data), err)
 		return fmt.Errorf("decode error")
 	}
 
@@ -314,13 +317,13 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 		h.log.Debug("Unknown FLV Video Frame: %+v\n", video)
 	}
 
-	data := new(bytes.Buffer)
-	if _, err := io.Copy(data, video.Data); err != nil {
+	data, err := io.ReadAll(video.Data)
+	if err != nil {
 		return err
 	}
 
 	var outBuf []byte
-	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data.Bytes())
+	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data)
 
 	if video.FrameType == flvtag.FrameTypeKeyFrame {
 		// Save the last full keyframe for anything we may need, eg thumbnails
@@ -342,6 +345,63 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 	return nil
 }
 
+func (h *ConnHandler) sendThumbnail() {
+	var img image.Image
+	h264dec, err := h264.NewH264Decoder()
+	defer h264dec.Close()
+	if err != nil {
+		h.log.Error(err)
+		return
+	}
+	img, err = h264dec.Decode(h.lastFullFrame)
+	if err != nil {
+		h.log.Error(err)
+		return
+	}
+
+	if img != nil {
+		buff := new(bytes.Buffer)
+		err = jpeg.Encode(buff, img, &jpeg.Options{
+			Quality: 75,
+		})
+		if err != nil {
+			h.log.Error(err)
+			return
+		}
+
+		err = h.manager.service.SendJpegPreviewImage(h.streamID, buff.Bytes())
+		if err != nil {
+			h.log.Error(err)
+		}
+		buff.Reset()
+
+		// Also update our metadata
+		h.videoWidth = img.Bounds().Dx()
+		h.videoHeight = img.Bounds().Dy()
+	}
+}
+func (h *ConnHandler) sendMetadata() {
+	err := h.manager.service.UpdateStreamMetadata(h.streamID, services.StreamMetadata{
+		AudioCodec:        h.audioCodec,
+		IngestServer:      h.manager.orchestrator.ClientHostname,
+		IngestViewers:     0,
+		LostPackets:       0, // Don't exist
+		NackPackets:       0, // Don't exist
+		RecvPackets:       h.videoPackets + h.audioPackets,
+		SourceBitrate:     0, // Likely just need to calculate the bytes between two 5s snapshots?
+		SourcePing:        0, // Not accessible unless we ping them manually
+		StreamTimeSeconds: int(h.lastTime - h.startTime),
+		VendorName:        h.clientVendorName,
+		VendorVersion:     h.clientVendorVersion,
+		VideoCodec:        h.videoCodec,
+		VideoHeight:       h.videoHeight,
+		VideoWidth:        h.videoWidth,
+	})
+	if err != nil {
+		h.log.Error(err)
+	}
+}
+
 func (h *ConnHandler) setupMetadataCollector() {
 	ticker := time.NewTicker(5 * time.Second)
 	go func() {
@@ -355,8 +415,6 @@ func (h *ConnHandler) setupMetadataCollector() {
 					"interframes": h.lastInterFrames,
 					"packets":     h.videoPackets - h.lastVideoPackets,
 				}).Debug("Processed 5s of input frames from RTMP input")
-				//h.log.Debugf("Processed %d video packets in the last 5 seconds (%d packets/sec)", h.videoPackets-h.lastVideoPackets, (h.videoPackets-h.lastVideoPackets)/5)
-				//h.log.Debugf("KeyFrames: %d (%d frames/sec) InterFrames: %d (%d frames/sec) ", h.lastKeyFrames, h.lastKeyFrames/5, h.lastInterFrames, h.lastInterFrames/5)
 
 				// Calculate some of our last fields
 				h.audioBps = 0
@@ -365,66 +423,11 @@ func (h *ConnHandler) setupMetadataCollector() {
 				h.lastKeyFrames = 0
 				h.lastInterFrames = 0
 
-				// Thumbnail generation
-				// https://github.com/gen2brain/x264-go/blob/master/examples/screengrab/screengrab.go
-
-				// This code is still buggy as hell, I suspect we're corrupting h.lastOutBuf data since we truncate
-				// it outside of the main thread.
 				if len(h.lastFullFrame) > 0 {
-					var img image.Image
-					h264dec, err := h264.NewH264Decoder()
-					defer h264dec.Close()
-					if err != nil {
-						h.log.Error(err)
-						return
-					}
-					img, err = h264dec.Decode(h.lastFullFrame)
-					if err != nil {
-						h.log.Error(err)
-						return
-					}
-
-					if img != nil {
-						buff := new(bytes.Buffer)
-						err = jpeg.Encode(buff, img, &jpeg.Options{
-							Quality: 75,
-						})
-						if err != nil {
-							h.log.Error(err)
-							return
-						}
-
-						err = h.manager.service.SendJpegPreviewImage(h.streamID, buff.Bytes())
-						if err != nil {
-							h.log.Error(err)
-						}
-						buff.Reset()
-
-						// Also update our metadata
-						h.videoWidth = img.Bounds().Dx()
-						h.videoHeight = img.Bounds().Dy()
-					}
+					h.sendThumbnail()
 				}
 
-				err := h.manager.service.UpdateStreamMetadata(h.streamID, services.StreamMetadata{
-					AudioCodec:        h.audioCodec,
-					IngestServer:      h.manager.orchestrator.ClientHostname,
-					IngestViewers:     0,
-					LostPackets:       0, // Don't exist
-					NackPackets:       0, // Don't exist
-					RecvPackets:       h.videoPackets + h.audioPackets,
-					SourceBitrate:     0, // Likely just need to calculate the bytes between two 5s snapshots?
-					SourcePing:        0, // Not accessible unless we ping them manually
-					StreamTimeSeconds: int(h.lastTime - h.startTime),
-					VendorName:        h.clientVendorName,
-					VendorVersion:     h.clientVendorVersion,
-					VideoCodec:        h.videoCodec,
-					VideoHeight:       h.videoHeight,
-					VideoWidth:        h.videoWidth,
-				})
-				if err != nil {
-					h.log.Error(err)
-				}
+				h.sendMetadata()
 
 			case <-h.stopMetadataCollection:
 				ticker.Stop()
