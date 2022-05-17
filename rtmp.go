@@ -224,14 +224,16 @@ func (h *ConnHandler) OnClose() {
 
 	h.stopMetadataCollection <- true
 
-	if err := h.manager.StopStream(h.channelID); err != nil {
-		h.log.Error(err)
-		// panic(err)
-	}
+	if h.authenticated {
+		if err := h.manager.StopStream(h.channelID); err != nil {
+			h.log.Error(err)
+			// panic(err)
+		}
 
-	if err := h.manager.RemoveStream(h.channelID); err != nil {
-		h.log.Error(err)
-		// panic(err)
+		if err := h.manager.RemoveStream(h.channelID); err != nil {
+			h.log.Error(err)
+			// panic(err)
+		}
 	}
 
 	if h.audioDecoder != nil {
@@ -348,11 +350,11 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 func (h *ConnHandler) sendThumbnail() {
 	var img image.Image
 	h264dec, err := h264.NewH264Decoder()
-	defer h264dec.Close()
 	if err != nil {
 		h.log.Error(err)
 		return
 	}
+	defer h264dec.Close()
 	img, err = h264dec.Decode(h.lastFullFrame)
 	if err != nil {
 		h.log.Error(err)

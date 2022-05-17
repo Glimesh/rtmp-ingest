@@ -14,6 +14,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/sirupsen/logrus"
 )
 
@@ -27,6 +28,16 @@ func main() {
 	if err != nil {
 		// How tf
 		log.Fatal(err)
+	}
+
+	sentryDsn, setupSentry := os.LookupEnv("SENTRY_DSN")
+	if setupSentry {
+		err := sentry.Init(sentry.ClientOptions{
+			Dsn: sentryDsn,
+		})
+		if err != nil {
+			log.Fatalf("sentry.Init: %s", err)
+		}
 	}
 
 	// Should use viper or something in the future

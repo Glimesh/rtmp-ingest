@@ -17,10 +17,10 @@ func TestH264Decode(t *testing.T) {
 	}
 
 	h264dec, err := NewH264Decoder()
-	defer h264dec.Close()
 	if err != nil {
 		t.Error(err)
 	}
+	defer h264dec.Close()
 	img, err := h264dec.Decode(file)
 	if err != nil {
 		t.Error(err)

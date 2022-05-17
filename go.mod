@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/Glimesh/go-fdkaac v0.0.0-20220325160929-2f6b0a53a22a
+	github.com/getsentry/sentry-go v0.13.0 // indirect
 	github.com/hasura/go-graphql-client v0.2.0
 	github.com/pion/rtcp v1.2.9 // indirect
 	github.com/pion/rtp/v2 v2.0.0
