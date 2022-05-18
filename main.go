@@ -14,6 +14,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/evalphobia/logrus_sentry"
 	"github.com/getsentry/sentry-go"
 	"github.com/sirupsen/logrus"
 )
@@ -37,6 +38,15 @@ func main() {
 		})
 		if err != nil {
 			log.Fatalf("sentry.Init: %s", err)
+		}
+		hook, err := logrus_sentry.NewSentryHook(sentryDsn, []logrus.Level{
+			logrus.PanicLevel,
+			logrus.FatalLevel,
+			logrus.ErrorLevel,
+		})
+
+		if err == nil {
+			log.Hooks.Add(hook)
 		}
 	}
 
