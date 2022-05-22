@@ -82,3 +82,20 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 
 	return sps, pps, outBuf
 }
+
+func appendNALHeader(video flvtag.VideoData, videoBuffer []byte) (outbuf []byte) {
+	var outBuf []byte
+	for offset := 0; offset < len(videoBuffer); {
+		bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
+		if offset+bufferLength >= len(videoBuffer) {
+			break
+		}
+
+		offset += headerLengthField
+		outBuf = append(outBuf, []byte{0x00, 0x00, 0x00, 0x01}...)
+		outBuf = append(outBuf, videoBuffer[offset:offset+bufferLength]...)
+
+		offset += bufferLength
+	}
+	return outBuf
+}

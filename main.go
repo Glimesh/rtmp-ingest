@@ -50,6 +50,8 @@ func main() {
 		}
 	}
 
+	_, debugVideo := os.LookupEnv("RTMP_INGEST_DEBUG_VIDEO")
+
 	// Should use viper or something in the future
 	glimeshService := glimesh.New(glimesh.Config{
 		Address:      os.Getenv("RTMP_INGEST_GLIMESH_ADDRESS"),
@@ -73,10 +75,13 @@ func main() {
 			OnStreamRelaying: func(message orchestrator.StreamRelayingMessage) {
 				if message.Context == 1 {
 					log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
-					streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
+					go streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
 				} else {
 					log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
-					streamManager.StopRelay(message.ChannelID, message.TargetHostname)
+					err := streamManager.StopRelay(message.ChannelID, message.TargetHostname)
+					if err != nil {
+						log.Error(err)
+					}
 				}
 			},
 		},
@@ -94,7 +99,7 @@ func main() {
 	}()
 
 	// Blocking call to start the RTMP server
-	NewRTMPServer(streamManager, log.WithFields(logrus.Fields{"app": "rtmp"}))
+	NewRTMPServer(streamManager, log.WithFields(logrus.Fields{"app": "rtmp"}), debugVideo)
 }
 
 func closeHandler(orch orchestrator.Client, streamManager StreamManager) {

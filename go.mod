@@ -9,6 +9,7 @@ require (
 	github.com/getsentry/raven-go v0.2.0 // indirect
 	github.com/getsentry/sentry-go v0.13.0 // indirect
 	github.com/hasura/go-graphql-client v0.2.0
+	github.com/nareix/joy5 v0.0.0-20210317075623-2c912ca30590 // indirect
 	github.com/pion/rtcp v1.2.9 // indirect
 	github.com/pion/rtp/v2 v2.0.0
 	github.com/pion/webrtc/v3 v3.1.5

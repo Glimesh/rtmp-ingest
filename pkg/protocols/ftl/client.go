@@ -21,13 +21,14 @@ type Conn struct {
 	controlConn      net.Conn
 	controlConnected bool
 	controlScanner   *bufio.Reader
-	mediaConn        net.Conn
+	MediaConn        net.Conn
 
 	failedHeartbeats int
 	quitTimer        chan bool
 }
 
-func Dial(addr string, channelID ChannelID, streamKey []byte) (conn *Conn, err error) {
+func Dial(targetHostname string, ftlPort int, channelID ChannelID, streamKey []byte) (conn *Conn, err error) {
+	addr := fmt.Sprintf("%s:%d", targetHostname, ftlPort)
 	tcpConn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return &Conn{}, err
@@ -37,7 +38,7 @@ func Dial(addr string, channelID ChannelID, streamKey []byte) (conn *Conn, err e
 	conn = &Conn{
 		controlConn:    tcpConn,
 		controlScanner: scanner,
-		mediaConn:      nil,
+		MediaConn:      nil,
 		channelId:      channelID,
 		quitTimer:      make(chan bool, 1),
 	}
@@ -57,21 +58,14 @@ func Dial(addr string, channelID ChannelID, streamKey []byte) (conn *Conn, err e
 		return conn, err
 	}
 
-	// After we're finally connected, make sure we stay alive
-	go conn.heartbeat()
+	mediaAddr := fmt.Sprintf("%s:%d", targetHostname, conn.AssignedMediaPort)
+	conn.MediaConn, err = net.Dial("udp", mediaAddr)
+	if err != nil {
+		return conn, err
+	}
 
 	return conn, err
 }
-
-//func (conn *Conn) eternalRead() {
-//	var buf [1024]byte
-//	for {
-//		n, err := conn.controlConn.Read(buf[0:])
-//		if err != nil {
-//
-//		}
-//	}
-//}
 
 func (conn *Conn) Close() error {
 	conn.controlConnected = false
@@ -79,6 +73,9 @@ func (conn *Conn) Close() error {
 
 	conn.sendControlMessage(requestDisconnect, false)
 	conn.controlConn.Close()
+	if conn.MediaConn != nil {
+		conn.MediaConn.Close()
+	}
 
 	return nil
 }
@@ -156,28 +153,27 @@ func (conn *Conn) sendMediaStart() (err error) {
 
 	return nil
 }
-func (conn *Conn) heartbeat() {
+func (conn *Conn) Heartbeat() {
 	ticker := time.NewTicker(5 * time.Second)
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				resp, err := conn.sendControlMessage(requestPing, true)
-				if err := checkFtlResponse(resp, err, responsePong); err != nil {
-					conn.failedHeartbeats += 1
-					if conn.failedHeartbeats >= allowedHeartbeatFailures {
-						conn.Close()
-						return
-					}
-				} else {
-					conn.failedHeartbeats = 0
+
+	for {
+		select {
+		case <-ticker.C:
+			resp, err := conn.sendControlMessage(requestPing, true)
+			if err := checkFtlResponse(resp, err, responsePong); err != nil {
+				conn.failedHeartbeats += 1
+				if conn.failedHeartbeats >= allowedHeartbeatFailures {
+					conn.Close()
+					return
 				}
-			case <-conn.quitTimer:
-				ticker.Stop()
-				return
+			} else {
+				conn.failedHeartbeats = 0
 			}
+		case <-conn.quitTimer:
+			ticker.Stop()
+			return
 		}
-	}()
+	}
 }
 
 func (conn *Conn) sendControlMessage(message string, needResponse bool) (resp string, err error) {

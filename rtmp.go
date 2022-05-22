@@ -10,6 +10,7 @@ import (
 	"image/jpeg"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +34,7 @@ const (
 	FTL_AUDIO_PT = 97
 )
 
-func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
+func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger, debugVideo bool) {
 	log.Info("Starting RTMP Server on :1935")
 
 	tcpAddr, err := net.ResolveTCPAddr("tcp", ":1935")
@@ -53,6 +54,7 @@ func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger) {
 					manager:                streamManager,
 					log:                    log,
 					stopMetadataCollection: make(chan bool, 1),
+					debugSaveVideo:         debugVideo,
 				},
 
 				ControlState: rtmp.StreamControlStateConfig{
@@ -116,7 +118,9 @@ type ConnHandler struct {
 	videoHeight         int
 	videoWidth          int
 
-	lastFullFrame []byte
+	debugSaveVideo bool
+	debugVideoFile *os.File
+	lastFullFrame  []byte
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -203,6 +207,11 @@ func (h *ConnHandler) initVideo(clockRate uint32) (err error) {
 	h.videoSequencer = rtp.NewFixedSequencer(25000)
 	h.videoPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_VIDEO_PT, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
 
+	if h.debugSaveVideo {
+		h.debugVideoFile, err = os.Create(fmt.Sprintf("debug-video-%d.h264", h.streamID))
+		return err
+	}
+
 	return nil
 }
 
@@ -239,6 +248,10 @@ func (h *ConnHandler) OnClose() {
 	if h.audioDecoder != nil {
 		h.audioDecoder.Close()
 		h.audioDecoder = nil
+	}
+
+	if h.debugSaveVideo {
+		h.debugVideoFile.Close()
 	}
 }
 
@@ -324,8 +337,17 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 		return err
 	}
 
+	// nalus, _ := h264joy.SplitNALUs(data)
+	// annexb := h264joy.JoinNALUsAnnexb(nalus)
+	// avcc := h264joy.JoinNALUsAVCC([][]byte{annexb})
+	// outBuf := avcc
+
 	var outBuf []byte
 	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data)
+	// outBuf := appendNALHeader(video, data)
+	// outBuf := data
+
+	h.debugVideoFile.Write(outBuf)
 
 	if video.FrameType == flvtag.FrameTypeKeyFrame {
 		// Save the last full keyframe for anything we may need, eg thumbnails

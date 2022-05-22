@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net"
 
 	"github.com/Glimesh/rtmp-ingest/pkg/orchestrator"
@@ -156,38 +155,36 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 	}
 
 	// Request to relay
-	ftlAddr := fmt.Sprintf("%s:%d", targetHostname, ftlPort)
-	ftlClient, err := ftl.Dial(ftlAddr, channelID, streamKey)
+
+	// func(mediaConn net.Conn) error {
+	// 	if _, exists := stream.relays[targetHostname]; !exists {
+	// 		return nil
+	// 	}
+
+	// 	stream.rtpWriter.Remove(mediaConn)
+	// 	fmt.Println("Removing RTP writer")
+
+	// 	return nil
+	// }
+	ftlClient, err := ftl.Dial(targetHostname, ftlPort, channelID, streamKey)
 	if err != nil {
 		return err
 	}
 
-	mediaAddr := fmt.Sprintf("%s:%d", targetHostname, ftlClient.AssignedMediaPort)
-	ftlMedia, err := net.Dial("udp", mediaAddr)
-	if err != nil {
-		return err
-	}
-
-	// Read nothing
-	//go func() {
-	//	buffer := make([]byte, 1024)
-	//	_, err = ftlMedia.Read(buffer)
-	//	if err != nil {
-	//		panic(err)
-	//	}
-	//}()
-
-	// setting the rtpWriter is enough to get a stream of packets coming through
 	stream.relays[targetHostname] = &StreamRelay{
 		targetHostname: targetHostname,
 		ftlControlPort: ftlPort,
 		ftlMediaPort:   ftlClient.AssignedMediaPort,
 		ftlClient:      ftlClient,
-		ftlMedia:       ftlMedia,
+		ftlMedia:       ftlClient.MediaConn,
 	}
 
-	// Add to MultiWriter
-	stream.rtpWriter.Append(ftlMedia)
+	// setting the rtpWriter is enough to get a stream of packets coming through
+	stream.rtpWriter.Append(ftlClient.MediaConn)
+
+	// Heartbeat (blocking thread we get disconnected)
+	ftlClient.Heartbeat()
+	stream.rtpWriter.Remove(ftlClient.MediaConn)
 
 	return nil
 }
@@ -204,7 +201,7 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 	}
 
 	// Remove from MultiWriter
-	stream.rtpWriter.Remove(stream.relays[targetHostname].ftlMedia)
+	stream.rtpWriter.Remove(stream.relays[targetHostname].ftlClient.MediaConn)
 
 	if err := stream.relays[targetHostname].close(); err != nil {
 		return err
@@ -221,7 +218,10 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 	}
 	// This can error if the relay is removed in another thread, which is common because an edge will stop being a relay for a stream when there are no viewers on it.
 	// TODO: Figure out how to conditionally error from this.
-	_, _ = stream.rtpWriter.ConcurrentWrite(buf)
+	stream.rtpWriter.ConcurrentWrite(buf)
+	// for _, host := range erroredHosts {
+	// 	stream.close
+	// }
 	return nil
 }
 
@@ -249,9 +249,6 @@ func (mgr *StreamManager) GetStream(id ftl.ChannelID) (*Stream, error) {
 }
 
 func (relay *StreamRelay) close() error {
-	if err := relay.ftlMedia.Close(); err != nil {
-		return err
-	}
 	if err := relay.ftlClient.Close(); err != nil {
 		return err
 	}
