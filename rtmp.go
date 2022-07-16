@@ -233,17 +233,17 @@ func (h *ConnHandler) OnClose() {
 
 	h.stopMetadataCollection <- true
 
-	if h.authenticated {
-		if err := h.manager.StopStream(h.channelID); err != nil {
-			h.log.Error(err)
-			// panic(err)
-		}
-
-		if err := h.manager.RemoveStream(h.channelID); err != nil {
-			h.log.Error(err)
-			// panic(err)
-		}
+	if err := h.manager.StopStream(h.channelID); err != nil {
+		h.log.Error(err)
+		// panic(err)
 	}
+
+	if err := h.manager.RemoveStream(h.channelID); err != nil {
+		h.log.Error(err)
+		// panic(err)
+	}
+
+	h.authenticated = false
 
 	if h.audioDecoder != nil {
 		h.audioDecoder.Close()
