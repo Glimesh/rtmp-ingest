@@ -100,7 +100,8 @@ func (client *Client) eternalRead() {
 		client.parseMessage(buf)
 	}
 	if err := scanner.Err(); err != nil {
-		client.logger.Error("Error decoding Orchestrator input:", err)
+		// For now if we lose the connection with the orchestrator we crash the server
+		client.logger.Fatal("Error decoding Orchestrator input:", err)
 	}
 }
 
