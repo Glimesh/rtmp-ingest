@@ -236,14 +236,14 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 
 func (mgr *StreamManager) RemoveStream(id ftl.ChannelID) error {
 	if _, exists := mgr.streams[id]; !exists {
-		return errors.New("stream does not exist in state")
+		return errors.New("RemoveStream stream does not exist in state")
 	}
 	delete(mgr.streams, id)
 	return nil
 }
 func (mgr *StreamManager) GetStream(id ftl.ChannelID) (*Stream, error) {
 	if _, exists := mgr.streams[id]; !exists {
-		return &Stream{}, errors.New("stream does not exist in state")
+		return &Stream{}, errors.New("GetStream stream does not exist in state")
 	}
 	return mgr.streams[id], nil
 }
