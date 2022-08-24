@@ -233,14 +233,17 @@ func (h *ConnHandler) OnClose() {
 
 	h.stopMetadataCollection <- true
 
-	if err := h.manager.StopStream(h.channelID); err != nil {
-		h.log.Error(err)
-		// panic(err)
-	}
+	// We only want to publish the stop if it's ours
+	if h.authenticated {
+		if err := h.manager.StopStream(h.channelID); err != nil {
+			h.log.Error(err)
+			// panic(err)
+		}
 
-	if err := h.manager.RemoveStream(h.channelID); err != nil {
-		h.log.Error(err)
-		// panic(err)
+		if err := h.manager.RemoveStream(h.channelID); err != nil {
+			h.log.Error(err)
+			// panic(err)
+		}
 	}
 
 	h.authenticated = false
