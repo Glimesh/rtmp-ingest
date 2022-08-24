@@ -22,6 +22,7 @@ import (
 func main() {
 	log := logrus.New()
 	log.Level = logrus.DebugLevel
+	log.SetReportCaller(true)
 
 	var streamManager StreamManager
 
