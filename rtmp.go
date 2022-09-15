@@ -259,6 +259,10 @@ func (h *ConnHandler) OnClose() {
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
+	if !h.authenticated {
+		return errors.New("stream is not longer authenticated")
+	}
+
 	// Convert AAC to opus
 	var audio flvtag.AudioData
 	if err := flvtag.DecodeAudioData(payload, &audio); err != nil {
@@ -317,6 +321,10 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 }
 
 func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
+	if !h.authenticated {
+		return errors.New("stream is not longer authenticated")
+	}
+
 	var video flvtag.VideoData
 	if err := flvtag.DecodeVideoData(payload, &video); err != nil {
 		return err
@@ -407,8 +415,8 @@ func (h *ConnHandler) sendThumbnail() {
 		h.videoHeight = img.Bounds().Dy()
 	}
 }
-func (h *ConnHandler) sendMetadata() {
-	err := h.manager.service.UpdateStreamMetadata(h.streamID, services.StreamMetadata{
+func (h *ConnHandler) sendMetadata() error {
+	return h.manager.service.UpdateStreamMetadata(h.streamID, services.StreamMetadata{
 		AudioCodec:        h.audioCodec,
 		IngestServer:      h.manager.orchestrator.ClientHostname,
 		IngestViewers:     0,
@@ -424,9 +432,6 @@ func (h *ConnHandler) sendMetadata() {
 		VideoHeight:       h.videoHeight,
 		VideoWidth:        h.videoWidth,
 	})
-	if err != nil {
-		h.log.Error(err)
-	}
 }
 
 func (h *ConnHandler) setupMetadataCollector() {
@@ -454,7 +459,13 @@ func (h *ConnHandler) setupMetadataCollector() {
 					h.sendThumbnail()
 				}
 
-				h.sendMetadata()
+				err := h.sendMetadata()
+				if err != nil {
+					// Unauthenticate us so the next Video / Audio packet can stop the stream
+					h.authenticated = false
+
+					h.log.Error(err)
+				}
 
 			case <-h.stopMetadataCollection:
 				ticker.Stop()
