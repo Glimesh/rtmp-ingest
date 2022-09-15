@@ -75,11 +75,12 @@ type ConnHandler struct {
 
 	log logrus.FieldLogger
 
-	channelID     ftl.ChannelID
-	streamID      ftl.StreamID
-	streamKey     []byte
-	authenticated bool
-	errored       bool
+	channelID        ftl.ChannelID
+	streamID         ftl.StreamID
+	streamKey        []byte
+	authenticated    bool
+	errored          bool
+	metadataFailures int
 
 	stream *Stream
 
@@ -131,6 +132,7 @@ func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
 func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) (err error) {
 	h.log.Info("OnConnect: %#v", cmd)
 
+	h.metadataFailures = 0
 	h.errored = false
 
 	h.videoClockRate = 90000
@@ -459,16 +461,22 @@ func (h *ConnHandler) setupMetadataCollector() {
 				h.lastInterFrames = 0
 
 				if len(h.lastFullFrame) > 0 {
+					// Todo: Handle thumbnail failures
 					h.sendThumbnail()
 				}
 
 				err := h.sendMetadata()
 				if err != nil {
 					// Unauthenticate us so the next Video / Audio packet can stop the stream
-					h.errored = true
+					h.metadataFailures += 1
+					if h.metadataFailures > 5 {
+						h.errored = true
+						h.log.Error("Metadata failures exceed 5, terminating the stream")
+					}
 
 					h.log.Error(err)
 				}
+				h.metadataFailures = 0
 
 			case <-h.stopMetadataCollection:
 				ticker.Stop()
