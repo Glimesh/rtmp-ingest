@@ -79,6 +79,7 @@ type ConnHandler struct {
 	streamID      ftl.StreamID
 	streamKey     []byte
 	authenticated bool
+	errored       bool
 
 	stream *Stream
 
@@ -129,6 +130,8 @@ func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
 
 func (h *ConnHandler) OnConnect(timestamp uint32, cmd *rtmpmsg.NetConnectionConnect) (err error) {
 	h.log.Info("OnConnect: %#v", cmd)
+
+	h.errored = false
 
 	h.videoClockRate = 90000
 	// TODO: This can be customized by the user, we should figure out how to infer it from the client
@@ -259,7 +262,7 @@ func (h *ConnHandler) OnClose() {
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
-	if !h.authenticated {
+	if h.errored {
 		return errors.New("stream is not longer authenticated")
 	}
 
@@ -321,7 +324,7 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 }
 
 func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
-	if !h.authenticated {
+	if h.errored {
 		return errors.New("stream is not longer authenticated")
 	}
 
@@ -462,7 +465,7 @@ func (h *ConnHandler) setupMetadataCollector() {
 				err := h.sendMetadata()
 				if err != nil {
 					// Unauthenticate us so the next Video / Audio packet can stop the stream
-					h.authenticated = false
+					h.errored = true
 
 					h.log.Error(err)
 				}
