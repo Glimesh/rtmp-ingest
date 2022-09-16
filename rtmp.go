@@ -153,7 +153,7 @@ func (h *ConnHandler) OnCreateStream(timestamp uint32, cmd *rtmpmsg.NetConnectio
 	return nil
 }
 
-func (h *ConnHandler) OnPublish(timestamp uint32, cmd *rtmpmsg.NetStreamPublish) (err error) {
+func (h *ConnHandler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *rtmpmsg.NetStreamPublish) (err error) {
 	h.log.Info("OnPublish: %#v", cmd)
 
 	if cmd.PublishingName == "" {
