@@ -42,6 +42,8 @@ github.com/Glimesh/go-rtmp v0.0.1 h1:flu/mO2XDOwyiRf2CS/5VVe52JQx4KAfPuOB/Z2v0Lo
 github.com/Glimesh/go-rtmp v0.0.1/go.mod h1:OylyjsXKyC52jWJkDgs75y4EzsYE3kA9q+OhB7upR9M=
 github.com/Glimesh/go-rtmp v0.0.2-0.20220916013445-fbcf45e11797 h1:DGfGxCQa7DAUg5UdOROngDjuFtTX4izDaWJ+JtwLTxM=
 github.com/Glimesh/go-rtmp v0.0.2-0.20220916013445-fbcf45e11797/go.mod h1:l0uVE9BZxMqZzDAoY1JNHnSYSHzlKyg6iUcQhl+VF1Q=
+github.com/Glimesh/go-rtmp v0.0.2-0.20220916142721-fb3bfff29db7 h1:eP+/frJK7lH8yJR+QW5bla90L70+Pj12QVARikLglkQ=
+github.com/Glimesh/go-rtmp v0.0.2-0.20220916142721-fb3bfff29db7/go.mod h1:l0uVE9BZxMqZzDAoY1JNHnSYSHzlKyg6iUcQhl+VF1Q=
 github.com/Joker/hpp v1.0.0/go.mod h1:8x5n+M1Hp5hC0g8okX3sR3vFQwynaX/UgSOM9MeBKzY=
 github.com/Shopify/goreferrer v0.0.0-20181106222321-ec9c9a553398/go.mod h1:a1uqRtAwp2Xwc6WNPJEufxJ7fx3npB4UV/JOLmbu5I0=
 github.com/ajg/form v1.5.1/go.mod h1:uL1WgH+h2mgNtvBq0339dVnzXdBETtL2LeUXaIv25UY=

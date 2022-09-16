@@ -2,7 +2,7 @@ module github.com/Glimesh/rtmp-ingest
 
 go 1.16
 
-replace github.com/yutopp/go-rtmp => github.com/Glimesh/go-rtmp v0.0.2-0.20220916013445-fbcf45e11797
+replace github.com/yutopp/go-rtmp => github.com/Glimesh/go-rtmp v0.0.2-0.20220916142721-fb3bfff29db7
 
 require (
 	github.com/Glimesh/go-fdkaac v0.0.0-20220325160929-2f6b0a53a22a
