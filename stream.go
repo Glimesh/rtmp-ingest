@@ -184,6 +184,7 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 
 	// Heartbeat (blocking thread we get disconnected)
 	ftlClient.Heartbeat()
+	// Doesn't this also need to unrelay from the orchestrator?
 	stream.rtpWriter.Remove(ftlClient.MediaConn)
 
 	return nil

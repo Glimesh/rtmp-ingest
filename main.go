@@ -75,8 +75,13 @@ func main() {
 		Callbacks: orchestrator.Callbacks{
 			OnStreamRelaying: func(message orchestrator.StreamRelayingMessage) {
 				if message.Context == 1 {
-					log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
-					go streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
+					go func() {
+						// This is a blocking call, once if returns we should stop the relay
+						log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
+						streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
+						log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
+						streamManager.StopRelay(message.ChannelID, message.TargetHostname)
+					}()
 				} else {
 					log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
 					err := streamManager.StopRelay(message.ChannelID, message.TargetHostname)

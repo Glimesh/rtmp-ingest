@@ -153,7 +153,7 @@ func (conn *Conn) sendMediaStart() (err error) {
 
 	return nil
 }
-func (conn *Conn) Heartbeat() {
+func (conn *Conn) Heartbeat() error {
 	ticker := time.NewTicker(5 * time.Second)
 
 	for {
@@ -164,14 +164,14 @@ func (conn *Conn) Heartbeat() {
 				conn.failedHeartbeats += 1
 				if conn.failedHeartbeats >= allowedHeartbeatFailures {
 					conn.Close()
-					return
+					return err
 				}
 			} else {
 				conn.failedHeartbeats = 0
 			}
 		case <-conn.quitTimer:
 			ticker.Stop()
-			return
+			return nil
 		}
 	}
 }

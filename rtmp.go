@@ -59,6 +59,7 @@ func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger, debugVid
 
 				ControlState: rtmp.StreamControlStateConfig{
 					DefaultBandwidthWindowSize: 6 * 1024 * 1024 / 8,
+					DefaultBandwidthLimitType:  rtmpmsg.LimitTypeSoft,
 				},
 				Logger: log.WithField("app", "yutopp/go-rtmp"),
 			}
@@ -208,31 +209,6 @@ func (h *ConnHandler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *
 	return nil
 }
 
-func (h *ConnHandler) initVideo(clockRate uint32) (err error) {
-	h.videoSequencer = rtp.NewFixedSequencer(25000)
-	h.videoPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_VIDEO_PT, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
-
-	if h.debugSaveVideo {
-		h.debugVideoFile, err = os.Create(fmt.Sprintf("debug-video-%d.h264", h.streamID))
-		return err
-	}
-
-	return nil
-}
-
-func (h *ConnHandler) initAudio(clockRate uint32) (err error) {
-	h.audioSequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
-	h.audioPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_AUDIO_PT, uint32(h.channelID), &codecs.OpusPayloader{}, h.audioSequencer, clockRate)
-
-	h.audioEncoder, err = opus.NewEncoder(int(clockRate), 2, opus.AppAudio)
-	if err != nil {
-		return err
-	}
-	h.audioDecoder = fdkaac.NewAacDecoder()
-
-	return nil
-}
-
 func (h *ConnHandler) OnClose() {
 	h.log.Info("OnClose")
 
@@ -261,6 +237,19 @@ func (h *ConnHandler) OnClose() {
 	if h.debugSaveVideo {
 		h.debugVideoFile.Close()
 	}
+}
+
+func (h *ConnHandler) initAudio(clockRate uint32) (err error) {
+	h.audioSequencer = rtp.NewFixedSequencer(0) // ftl client says this should be changed to a random value
+	h.audioPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_AUDIO_PT, uint32(h.channelID), &codecs.OpusPayloader{}, h.audioSequencer, clockRate)
+
+	h.audioEncoder, err = opus.NewEncoder(int(clockRate), 2, opus.AppAudio)
+	if err != nil {
+		return err
+	}
+	h.audioDecoder = fdkaac.NewAacDecoder()
+
+	return nil
 }
 
 func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
@@ -320,6 +309,18 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 				return err
 			}
 		}
+	}
+
+	return nil
+}
+
+func (h *ConnHandler) initVideo(clockRate uint32) (err error) {
+	h.videoSequencer = rtp.NewFixedSequencer(25000)
+	h.videoPacketizer = rtp.NewPacketizer(FTL_MTU, FTL_VIDEO_PT, uint32(h.channelID+1), &codecs.H264Payloader{}, h.videoSequencer, clockRate)
+
+	if h.debugSaveVideo {
+		h.debugVideoFile, err = os.Create(fmt.Sprintf("debug-video-%d.h264", h.streamID))
+		return err
 	}
 
 	return nil
@@ -474,7 +475,7 @@ func (h *ConnHandler) setupMetadataCollector() {
 						h.log.Error("Metadata failures exceed 5, terminating the stream")
 					}
 
-					h.log.Error(err)
+					h.log.Warn(err)
 				}
 				h.metadataFailures = 0
 
