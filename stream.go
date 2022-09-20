@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"net"
 
 	"github.com/Glimesh/rtmp-ingest/pkg/orchestrator"
@@ -120,8 +121,11 @@ func (mgr *StreamManager) StopStream(channelID ftl.ChannelID) (err error) {
 		return err
 	}
 
+	fmt.Printf("stream.relays: %#v\n", stream.relays)
+
 	// Close all of our FTL relay connections
-	for _, relay := range stream.relays {
+	for name, relay := range stream.relays {
+		fmt.Printf("Closing %s\n", name)
 		if err := relay.close(); err != nil {
 			return err
 		}
@@ -219,10 +223,29 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 	}
 	// This can error if the relay is removed in another thread, which is common because an edge will stop being a relay for a stream when there are no viewers on it.
 	// TODO: Figure out how to conditionally error from this.
-	stream.rtpWriter.ConcurrentWrite(buf)
-	// for _, host := range erroredHosts {
-	// 	stream.close
-	// }
+	// stream.rtpWriter.ConcurrentWrite(buf)
+	for relayHostname, relay := range stream.relays {
+		go func(relayHostname string, relay *StreamRelay) {
+			// Probably not safe to do this inside here...?
+			if _, err := relay.ftlClient.MediaConn.Write(buf); err != nil {
+				// Somehow error and tell orchestrator we're not relaying
+
+				// Relay might not actually exist in our state
+				if _, exists := stream.relays[relayHostname]; !exists {
+					return
+				}
+
+				// Remove from MultiWriter
+				stream.rtpWriter.Remove(stream.relays[relayHostname].ftlClient.MediaConn)
+
+				if err := stream.relays[relayHostname].close(); err != nil {
+					return
+				}
+
+				delete(stream.relays, relayHostname)
+			}
+		}(relayHostname, relay)
+	}
 	return nil
 }
 

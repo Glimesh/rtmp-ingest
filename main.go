@@ -79,11 +79,11 @@ func main() {
 						// This is a blocking call, once if returns we should stop the relay
 						log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
 						streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
-						log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
+						log.Infof("Removing relay for %d to %s per func termination", message.ChannelID, message.TargetHostname)
 						streamManager.StopRelay(message.ChannelID, message.TargetHostname)
 					}()
 				} else {
-					log.Infof("Removing relay for %d to %s", message.ChannelID, message.TargetHostname)
+					log.Infof("Removing relay for %d to %s per orchestrator", message.ChannelID, message.TargetHostname)
 					err := streamManager.StopRelay(message.ChannelID, message.TargetHostname)
 					if err != nil {
 						log.Error(err)

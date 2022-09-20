@@ -216,6 +216,8 @@ func (h *ConnHandler) OnClose() {
 
 	// We only want to publish the stop if it's ours
 	if h.authenticated {
+		// StopStream mainly calls external services, there's a chance this call can hang for a bit while the other services are processing
+		// However it's not safe to call RemoveStream until this is finished or the pointer wont... exist?
 		if err := h.manager.StopStream(h.channelID); err != nil {
 			h.log.Error(err)
 			// panic(err)
