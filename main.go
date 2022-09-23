@@ -95,6 +95,7 @@ func main() {
 							// For some reason the relay media command errored, we need to loop & retry
 							retries++
 							log.Error(err)
+							streamManager.StopRelay(message.ChannelID, message.TargetHostname)
 							if retries > 5 {
 								log.Errorf("Relay for %d to %s failed 5 times, cancelling", message.ChannelID, message.TargetHostname)
 								return
