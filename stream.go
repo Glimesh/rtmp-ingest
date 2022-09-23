@@ -191,12 +191,8 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 	ctx := context.Background()
 	ctx = stream.edgeWriter.new(ctx, targetHostname, ftlClient.MediaConn)
 
-	// Heartbeat (blocking thread we get disconnected)
-	ftlClient.Heartbeat(ctx)
-
-	stream.edgeWriter.remove(targetHostname)
-
-	return nil
+	// Heartbeat (blocking thread until we get disconnected)
+	return ftlClient.Heartbeat(ctx)
 }
 
 func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname string) error {
