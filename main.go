@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 
@@ -93,10 +94,12 @@ func main() {
 
 							// For some reason the relay media command errored, we need to loop & retry
 							retries++
+							log.Error(err)
 							if retries > 5 {
-								log.Error("Relay for %d to %s failed 5 times, cancelling", message.ChannelID, message.TargetHostname)
+								log.Errorf("Relay for %d to %s failed 5 times, cancelling", message.ChannelID, message.TargetHostname)
 								return
 							}
+							time.Sleep(1 * time.Second)
 						}
 					}()
 				} else {

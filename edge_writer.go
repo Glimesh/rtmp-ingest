@@ -39,7 +39,7 @@ func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) con
 
 			conn.SetDeadline(time.Now().Add(5 * time.Second))
 			if _, err := conn.Write(<-edge.buffers[host]); err != nil {
-				fmt.Println(err)
+				// fmt.Println(err)
 				cancel()
 			}
 		}
