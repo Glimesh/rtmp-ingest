@@ -22,7 +22,10 @@ import (
 func main() {
 	log := logrus.New()
 	log.Level = logrus.DebugLevel
-	log.SetReportCaller(true)
+	// log.SetReportCaller(true)
+	log.SetFormatter(&logrus.TextFormatter{
+		ForceColors: true,
+	})
 
 	var streamManager StreamManager
 

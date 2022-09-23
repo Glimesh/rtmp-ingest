@@ -57,6 +57,7 @@ func (t *multiWriter) ConcurrentWrite(p []byte) (n int, err error) {
 	for _, w := range t.writers {
 		go func(wr io.Writer, p []byte, ch chan data) {
 			n, err = wr.Write(p)
+			// We can remove writers easily when they fail here, but that doesn't let us tell the orchestrator things are no longer working
 			if err != nil {
 				ch <- data{n, err}
 				return

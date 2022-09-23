@@ -17,9 +17,8 @@ type Stream struct {
 	// mediaStarted is set after media bytes have come in from the client
 	mediaStarted bool
 
-	// rtpWriter is a multi writer for all of our relays
-	rtpWriter *multiWriter
-	relays    map[string]*StreamRelay
+	relays     map[string]*StreamRelay
+	edgeWriter *edgeWriter
 
 	channelID ftl.ChannelID
 	streamID  ftl.StreamID
@@ -50,16 +49,14 @@ func NewStreamManager(orchestrator orchestrator.Client, service services.Service
 }
 
 func (mgr *StreamManager) NewStream(channelID ftl.ChannelID) error {
-	mw := MultiWriter()
-	// Helps the compiler know what we're talking about
-	var m = mw.(*multiWriter)
+	edgeWriter := NewEdgeWriter()
 
 	stream := &Stream{
 		authenticated: false,
 		mediaStarted:  false,
 		channelID:     channelID,
 		relays:        make(map[string]*StreamRelay),
-		rtpWriter:     m,
+		edgeWriter:    edgeWriter,
 	}
 
 	if _, exists := mgr.streams[channelID]; exists {
@@ -158,6 +155,10 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 		return errors.New("already sending media packets to this relay")
 	}
 
+	// We should likely just write the last keyframe packet we have
+	// in order to get the relay started
+	// Actual this needs to be sizable chunk of RTP so ignore for now
+
 	// Request to relay
 
 	// func(mediaConn net.Conn) error {
@@ -184,12 +185,14 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 	}
 
 	// setting the rtpWriter is enough to get a stream of packets coming through
-	stream.rtpWriter.Append(ftlClient.MediaConn)
+	// ftlClient.MediaConn.SetDeadline(time.Now().Add(time.Second * 5))
+	// stream.rtpWriter.Append(ftlClient.MediaConn)
+	stream.edgeWriter.new(targetHostname, ftlClient.MediaConn)
 
 	// Heartbeat (blocking thread we get disconnected)
 	ftlClient.Heartbeat()
-	// Doesn't this also need to unrelay from the orchestrator?
-	stream.rtpWriter.Remove(ftlClient.MediaConn)
+
+	stream.edgeWriter.remove(targetHostname)
 
 	return nil
 }
@@ -206,7 +209,7 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 	}
 
 	// Remove from MultiWriter
-	stream.rtpWriter.Remove(stream.relays[targetHostname].ftlClient.MediaConn)
+	stream.edgeWriter.remove(targetHostname)
 
 	if err := stream.relays[targetHostname].close(); err != nil {
 		return err
@@ -217,35 +220,18 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 }
 
 func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
+	// Short circuit
+	// if len(stream.relays) == 0 {
+	// 	return nil
+	// }
+
 	buf, err := packet.Marshal()
 	if err != nil {
 		return err
 	}
 	// This can error if the relay is removed in another thread, which is common because an edge will stop being a relay for a stream when there are no viewers on it.
 	// TODO: Figure out how to conditionally error from this.
-	// stream.rtpWriter.ConcurrentWrite(buf)
-	for relayHostname, relay := range stream.relays {
-		go func(relayHostname string, relay *StreamRelay) {
-			// Probably not safe to do this inside here...?
-			if _, err := relay.ftlClient.MediaConn.Write(buf); err != nil {
-				// Somehow error and tell orchestrator we're not relaying
-
-				// Relay might not actually exist in our state
-				if _, exists := stream.relays[relayHostname]; !exists {
-					return
-				}
-
-				// Remove from MultiWriter
-				stream.rtpWriter.Remove(stream.relays[relayHostname].ftlClient.MediaConn)
-
-				if err := stream.relays[relayHostname].close(); err != nil {
-					return
-				}
-
-				delete(stream.relays, relayHostname)
-			}
-		}(relayHostname, relay)
-	}
+	stream.edgeWriter.write(buf)
 	return nil
 }
 
