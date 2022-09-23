@@ -2,6 +2,7 @@ package ftl
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/hex"
@@ -153,7 +154,7 @@ func (conn *Conn) sendMediaStart() (err error) {
 
 	return nil
 }
-func (conn *Conn) Heartbeat() error {
+func (conn *Conn) Heartbeat(ctx context.Context) error {
 	ticker := time.NewTicker(5 * time.Second)
 
 	for {
@@ -169,6 +170,9 @@ func (conn *Conn) Heartbeat() error {
 			} else {
 				conn.failedHeartbeats = 0
 			}
+		case <-ctx.Done():
+			ticker.Stop()
+			return ctx.Err()
 		case <-conn.quitTimer:
 			ticker.Stop()
 			return nil

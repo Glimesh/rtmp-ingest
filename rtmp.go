@@ -79,6 +79,7 @@ type ConnHandler struct {
 	channelID        ftl.ChannelID
 	streamID         ftl.StreamID
 	streamKey        []byte
+	started          bool
 	authenticated    bool
 	errored          bool
 	metadataFailures int
@@ -175,6 +176,9 @@ func (h *ConnHandler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *
 		h.log.Error(err)
 		return err
 	}
+
+	h.started = true
+
 	if err := h.manager.Authenticate(h.channelID, h.streamKey); err != nil {
 		h.log.Error(err)
 		return err
@@ -186,6 +190,8 @@ func (h *ConnHandler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *
 		return err
 	}
 
+	h.authenticated = true
+
 	h.stream = stream
 	h.streamID = stream.streamID
 
@@ -194,8 +200,6 @@ func (h *ConnHandler) OnPublish(ctx *rtmp.StreamContext, timestamp uint32, cmd *
 		"channel_id": h.channelID,
 		"stream_id":  h.streamID,
 	})
-
-	h.authenticated = true
 
 	if err := h.initVideo(h.videoClockRate); err != nil {
 		return err
@@ -222,14 +226,16 @@ func (h *ConnHandler) OnClose() {
 			h.log.Error(err)
 			// panic(err)
 		}
+	}
+	h.authenticated = false
 
+	if h.started {
 		if err := h.manager.RemoveStream(h.channelID); err != nil {
 			h.log.Error(err)
 			// panic(err)
 		}
 	}
-
-	h.authenticated = false
+	h.started = false
 
 	if h.audioDecoder != nil {
 		h.audioDecoder.Close()

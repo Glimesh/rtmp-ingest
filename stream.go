@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -187,10 +188,11 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 	// setting the rtpWriter is enough to get a stream of packets coming through
 	// ftlClient.MediaConn.SetDeadline(time.Now().Add(time.Second * 5))
 	// stream.rtpWriter.Append(ftlClient.MediaConn)
-	stream.edgeWriter.new(targetHostname, ftlClient.MediaConn)
+	ctx := context.Background()
+	stream.edgeWriter.new(ctx, targetHostname, ftlClient.MediaConn)
 
 	// Heartbeat (blocking thread we get disconnected)
-	ftlClient.Heartbeat()
+	ftlClient.Heartbeat(ctx)
 
 	stream.edgeWriter.remove(targetHostname)
 

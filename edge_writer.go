@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"sync"
+	"time"
 )
 
 const bufSize = 1000
@@ -24,8 +26,10 @@ func NewEdgeWriter() *edgeWriter {
 	}
 }
 
-func (edge *edgeWriter) new(host string, conn net.Conn) {
+func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) {
 	edge.buffers[host] = make(chan []byte, bufSize)
+
+	_, cancel := context.WithCancel(ctx)
 
 	go func() {
 		for {
@@ -33,7 +37,11 @@ func (edge *edgeWriter) new(host string, conn net.Conn) {
 				return
 			}
 
-			conn.Write(<-edge.buffers[host])
+			conn.SetDeadline(time.Now().Add(5 * time.Second))
+			if _, err := conn.Write(<-edge.buffers[host]); err != nil {
+				fmt.Println(err)
+				cancel()
+			}
 		}
 	}()
 }
