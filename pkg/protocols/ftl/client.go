@@ -171,6 +171,7 @@ func (conn *Conn) Heartbeat(ctx context.Context) error {
 				conn.failedHeartbeats = 0
 			}
 		case <-ctx.Done():
+			conn.Close()
 			ticker.Stop()
 			return ctx.Err()
 		case <-conn.quitTimer:

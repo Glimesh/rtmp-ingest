@@ -189,7 +189,7 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 	// ftlClient.MediaConn.SetDeadline(time.Now().Add(time.Second * 5))
 	// stream.rtpWriter.Append(ftlClient.MediaConn)
 	ctx := context.Background()
-	stream.edgeWriter.new(ctx, targetHostname, ftlClient.MediaConn)
+	ctx = stream.edgeWriter.new(ctx, targetHostname, ftlClient.MediaConn)
 
 	// Heartbeat (blocking thread we get disconnected)
 	ftlClient.Heartbeat(ctx)

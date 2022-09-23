@@ -26,10 +26,10 @@ func NewEdgeWriter() *edgeWriter {
 	}
 }
 
-func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) {
+func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) context.Context {
 	edge.buffers[host] = make(chan []byte, bufSize)
 
-	_, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		for {
@@ -44,6 +44,8 @@ func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) {
 			}
 		}
 	}()
+
+	return ctx
 }
 
 func (edge *edgeWriter) write(buf []byte) {
