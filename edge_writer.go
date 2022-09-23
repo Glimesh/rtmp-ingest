@@ -6,6 +6,8 @@ import (
 	"sync"
 )
 
+const bufSize = 1000
+
 type edgeWriter struct {
 	buffers map[string]chan []byte
 
@@ -23,7 +25,7 @@ func NewEdgeWriter() *edgeWriter {
 }
 
 func (edge *edgeWriter) new(host string, conn net.Conn) {
-	edge.buffers[host] = make(chan []byte, 100)
+	edge.buffers[host] = make(chan []byte, bufSize)
 
 	go func() {
 		for {
@@ -45,7 +47,7 @@ func (edge *edgeWriter) write(buf []byte) {
 		// Bug is the writes continue even after the edge is closed, likely filling up the buffer
 
 		// fmt.Println("Writing to buffer for ", host)
-		if len(edge.buffers[host]) >= 100 {
+		if len(edge.buffers[host]) >= bufSize {
 			fmt.Printf("BUFFER FULL FOR %s, PURGING...\n", host)
 			// If the queue is full, read the first message to start clearing it
 			<-edge.buffers[host]
