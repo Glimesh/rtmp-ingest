@@ -71,12 +71,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	orch := orchestrator.NewClient(orchestrator.Config{
+	var orch orchestrator.Client
+	orch = orchestrator.NewClient(orchestrator.Config{
 		RegionCode: "global",
 		Hostname:   hostname,
 		Logger:     log.WithFields(logrus.Fields{"app": "orchestrator"}),
 		Callbacks: orchestrator.Callbacks{
-			OnStreamRelaying: func(message orchestrator.StreamRelayingMessage) {
+			OnStreamRelaying: func(header orchestrator.MessageHeader, message orchestrator.StreamRelayingMessage) {
 				if message.Context == 1 {
 					go func() {
 						log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
@@ -90,6 +91,8 @@ func main() {
 						log.Error(err)
 					}
 				}
+
+				orch.SendResponseMessage(orchestrator.TypeStreamRelaying, header.ID, []byte{})
 			},
 		},
 	})

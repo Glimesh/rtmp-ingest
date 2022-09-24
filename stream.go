@@ -218,11 +218,6 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 }
 
 func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
-	// Short circuit
-	// if len(stream.relays) == 0 {
-	// 	return nil
-	// }
-
 	buf, err := packet.Marshal()
 	if err != nil {
 		return err
@@ -232,8 +227,7 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 	// TODO: Figure out how to conditionally error from this.
 	// stream.edgeWriter.write(buf)
 	for _, relay := range stream.relays {
-		// Need to make sure using relay.ftlMedia is fine here
-		relay.ftlMedia.WriteToUDP(buf, relay.ftlMediaAddr)
+		relay.ftlMedia.Write(buf)
 	}
 
 	return nil

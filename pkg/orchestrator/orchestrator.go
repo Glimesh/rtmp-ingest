@@ -23,12 +23,12 @@ type Client struct {
 }
 
 type Callbacks struct {
-	OnIntro               func(message IntroMessage)
-	OnOutro               func(message OutroMessage)
-	OnNodeState           func(message NodeStateMessage)
-	OnChannelSubscription func(message ChannelSubscriptionMessage)
-	OnStreamPublishing    func(message StreamPublishingMessage)
-	OnStreamRelaying      func(message StreamRelayingMessage)
+	OnIntro               func(header MessageHeader, message IntroMessage)
+	OnOutro               func(header MessageHeader, message OutroMessage)
+	OnNodeState           func(header MessageHeader, message NodeStateMessage)
+	OnChannelSubscription func(header MessageHeader, message ChannelSubscriptionMessage)
+	OnStreamPublishing    func(header MessageHeader, message StreamPublishingMessage)
+	OnStreamRelaying      func(header MessageHeader, message StreamRelayingMessage)
 }
 
 type Config struct {
@@ -158,27 +158,27 @@ func (client *Client) handleMessage(header MessageHeader, payload []byte) {
 	switch header.Type {
 	case TypeIntro:
 		if client.callbacks.OnIntro != nil {
-			client.callbacks.OnIntro(DecodeIntroMessage(payload))
+			client.callbacks.OnIntro(header, DecodeIntroMessage(payload))
 		}
 	case TypeOutro:
 		if client.callbacks.OnOutro != nil {
-			client.callbacks.OnOutro(DecodeOutroMessage(payload))
+			client.callbacks.OnOutro(header, DecodeOutroMessage(payload))
 		}
 	case TypeNodeState:
 		if client.callbacks.OnNodeState != nil {
-			client.callbacks.OnNodeState(DecodeNodeStateMessage(payload))
+			client.callbacks.OnNodeState(header, DecodeNodeStateMessage(payload))
 		}
 	case TypeChannelSubscription:
 		if client.callbacks.OnChannelSubscription != nil {
-			client.callbacks.OnChannelSubscription(DecodeChannelSubscriptionMessage(payload))
+			client.callbacks.OnChannelSubscription(header, DecodeChannelSubscriptionMessage(payload))
 		}
 	case TypeStreamPublishing:
 		if client.callbacks.OnStreamPublishing != nil {
-			client.callbacks.OnStreamPublishing(DecodeStreamPublishingMessage(payload))
+			client.callbacks.OnStreamPublishing(header, DecodeStreamPublishingMessage(payload))
 		}
 	case TypeStreamRelaying:
 		if client.callbacks.OnStreamRelaying != nil {
-			client.callbacks.OnStreamRelaying(DecodeStreamRelayingMessage(payload))
+			client.callbacks.OnStreamRelaying(header, DecodeStreamRelayingMessage(payload))
 		}
 	}
 }
@@ -199,7 +199,34 @@ func (client *Client) SendMessage(messageType uint8, payload []byte) error {
 	messageBuffer := message.Encode()
 	messageBuffer = append(messageBuffer, payload...)
 
-	client.logger.Debugf("Sending Orchestrator Hex: %s", insertNth(hex.EncodeToString(messageBuffer), 2))
+	client.logger.Debugf("Sending Orchestrator: %#v", messageBuffer)
+	_, err := client.transport.Write(messageBuffer)
+	if err != nil {
+		return err
+	}
+
+	client.lastMessageID += 1
+
+	return nil
+}
+
+func (client *Client) SendResponseMessage(messageType uint8, messageID uint8, payload []byte) error {
+	if !client.connected {
+		return errors.New("orchestrator connection is closed")
+	}
+
+	// Construct the message
+	message := MessageHeader{
+		Request:       false,
+		Success:       true,
+		Type:          messageType,
+		ID:            messageID,
+		PayloadLength: uint16(len(payload)),
+	}
+	messageBuffer := message.Encode()
+	messageBuffer = append(messageBuffer, payload...)
+
+	client.logger.Debugf("Sending Orchestrator: %#v with %#v", message, payload)
 	_, err := client.transport.Write(messageBuffer)
 	if err != nil {
 		return err
