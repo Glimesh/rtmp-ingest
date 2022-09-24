@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 
@@ -80,9 +81,26 @@ func main() {
 			OnStreamRelaying: func(header orchestrator.MessageHeader, message orchestrator.StreamRelayingMessage) {
 				if message.Context == 1 {
 					go func() {
-						log.Infof("Starting relay for %d to %s", message.ChannelID, message.TargetHostname)
-						// This is a blocking call, once if returns we should conditionally stop the relay
-						streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
+						attempts := 1
+						for {
+							if attempts >= 5 {
+								log.Errorf("Ran out of orchestrator relay attempts for %d to %s", message.ChannelID, message.TargetHostname)
+								return
+							}
+							log.Infof("Starting relay for %d to %s attempt %d", message.ChannelID, message.TargetHostname, attempts)
+							// This is a blocking call, once if returns we should conditionally stop the relay
+							err := streamManager.RelayMedia(message.ChannelID, message.TargetHostname, ftl.DefaultPort, message.StreamKey)
+							if err == nil {
+								// Successful exit, just return
+								log.Infof("Ended relay for %d to %s", message.ChannelID, message.TargetHostname)
+								return
+							}
+
+							attempts++
+							log.Infof("Errored relay for %d to %s", message.ChannelID, message.TargetHostname)
+							log.Error(err)
+							time.Sleep(time.Second)
+						}
 					}()
 				} else {
 					log.Infof("Removing relay for %d to %s per orchestrator", message.ChannelID, message.TargetHostname)

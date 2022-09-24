@@ -46,8 +46,11 @@ const (
 
 	// Server Responses
 	// Should consider removing the new lines and stripping it out from the responses since it's a protocol default
-	responseHmacPayload = "200 %s"
-	responseOk          = "200"
-	responsePong        = "201"
-	responseMediaPort   = "200. Use UDP port %d"
+	responseHmacPayload         = "200 %s"
+	responseOk                  = "200"
+	responsePong                = "201"
+	responseMediaPort           = "200. Use UDP port %d"
+	responseServerTerminate     = "410"
+	responseInvalidStreamKey    = "405"
+	responseInternalServerError = "500"
 )

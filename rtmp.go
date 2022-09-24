@@ -32,6 +32,9 @@ const (
 	FTL_MTU      = 1392
 	FTL_VIDEO_PT = 96
 	FTL_AUDIO_PT = 97
+
+	// Realistic 8000Kbps
+	BANDWIDTH_LIMIT = 8000 * 1000
 )
 
 func NewRTMPServer(streamManager StreamManager, log logrus.FieldLogger, debugVideo bool) {
@@ -121,6 +124,8 @@ type ConnHandler struct {
 	audioCodec          string
 	videoHeight         int
 	videoWidth          int
+
+	outputBytes int
 
 	debugSaveVideo bool
 	debugVideoFile *os.File
@@ -312,6 +317,7 @@ func (h *ConnHandler) OnAudio(timestamp uint32, payload io.Reader) error {
 
 		for _, p := range packets {
 			h.audioPackets++
+			h.outputBytes += len(p.Payload)
 			if err := h.stream.WriteRTP(p); err != nil {
 				h.log.Error(err)
 				return err
@@ -385,6 +391,7 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 
 	for _, p := range packets {
 		h.videoPackets++
+		h.outputBytes += len(p.Payload)
 		if err := h.stream.WriteRTP(p); err != nil {
 			h.log.Error(err)
 			return err
@@ -460,7 +467,15 @@ func (h *ConnHandler) setupMetadataCollector() {
 					"keyframes":   h.lastKeyFrames,
 					"interframes": h.lastInterFrames,
 					"packets":     h.videoPackets - h.lastVideoPackets,
+					"bytes":       h.outputBytes,
 				}).Debug("Processed 5s of input frames from RTMP input")
+
+				// Check to ensure we're not over our bandwidth limit
+				if h.outputBytes >= BANDWIDTH_LIMIT {
+					h.log.Errorf("Sent %d bytes over the last 5 seconds, ending stream", h.outputBytes)
+					h.errored = true
+				}
+				h.outputBytes = 0
 
 				// Calculate some of our last fields
 				h.audioBps = 0

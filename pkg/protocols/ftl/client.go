@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -45,17 +46,17 @@ func Dial(targetHostname string, ftlPort int, channelID ChannelID, streamKey []b
 	}
 
 	if err = conn.sendAuthentication(channelID, streamKey); err != nil {
-		conn.Close()
+		conn.close()
 		return conn, err
 	}
 	time.Sleep(time.Second)
 	if err = conn.sendMetadataBatch(); err != nil {
-		conn.Close()
+		conn.close()
 		return conn, err
 	}
 	time.Sleep(time.Second)
 	if err = conn.sendMediaStart(); err != nil {
-		conn.Close()
+		conn.close()
 		return conn, err
 	}
 
@@ -74,11 +75,24 @@ func Dial(targetHostname string, ftlPort int, channelID ChannelID, streamKey []b
 }
 
 func (conn *Conn) Close() error {
-	conn.controlConnected = false
+	// Stop heartbeat
 	conn.quitTimer <- true
 
+	if !conn.controlConnected {
+		return nil
+	}
+
+	return conn.close()
+}
+
+func (conn *Conn) close() error {
+	conn.controlConnected = false
+
+	// Since the server likely closed our connection already, don't wait long
+	conn.controlConn.SetDeadline(time.Now().Add(time.Second * 1))
 	conn.sendControlMessage(requestDisconnect, false)
 	conn.controlConn.Close()
+
 	if conn.MediaConn != nil {
 		conn.MediaConn.Close()
 	}
@@ -166,14 +180,28 @@ func (conn *Conn) Heartbeat() error {
 		select {
 		case <-ticker.C:
 			resp, err := conn.sendControlMessage(requestPing, true)
-			if err := checkFtlResponse(resp, err, responsePong); err != nil {
-				conn.failedHeartbeats += 1
-				if conn.failedHeartbeats >= allowedHeartbeatFailures {
-					conn.Close()
-					return err
+
+			// Todo: Move these to the response handler
+			switch resp {
+			case responseServerTerminate:
+				conn.close()
+				return errors.New("got server termination (410) response, ending immediately")
+			case responseInvalidStreamKey:
+				conn.close()
+				return errors.New("got invalid stream key (405) response, ending immediately")
+			case responseInternalServerError:
+				conn.close()
+				return errors.New("got internal server error (500) response, ending immediately")
+			default:
+				if err := checkFtlResponse(resp, err, responsePong); err != nil {
+					conn.failedHeartbeats += 1
+					if conn.failedHeartbeats >= allowedHeartbeatFailures {
+						conn.close()
+						return err
+					}
+				} else {
+					conn.failedHeartbeats = 0
 				}
-			} else {
-				conn.failedHeartbeats = 0
 			}
 		case <-conn.quitTimer:
 			ticker.Stop()
@@ -197,7 +225,7 @@ func (conn *Conn) sendControlMessage(message string, needResponse bool) (resp st
 
 func (conn *Conn) writeControlMessage(message string) error {
 	final := message + "\r\n\r\n"
-	//log.Printf("SEND: %q", final)
+	log.Printf("FTL SEND: %q", final)
 	_, err := conn.controlConn.Write([]byte(final))
 	return err
 }
@@ -212,7 +240,7 @@ func (conn *Conn) readControlMessage() (string, error) {
 		return "", err
 	}
 
-	//log.Printf("RECV: %q", recv)
+	log.Printf("FTL RECV: %q", recv)
 	return strings.TrimRight(recv, "\n"), nil
 }
 
