@@ -2,7 +2,6 @@ package ftl
 
 import (
 	"bufio"
-	"context"
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/hex"
@@ -22,7 +21,8 @@ type Conn struct {
 	controlConn      net.Conn
 	controlConnected bool
 	controlScanner   *bufio.Reader
-	MediaConn        net.Conn
+	MediaAddr        *net.UDPAddr
+	MediaConn        *net.UDPConn
 
 	failedHeartbeats int
 	quitTimer        chan bool
@@ -59,8 +59,12 @@ func Dial(targetHostname string, ftlPort int, channelID ChannelID, streamKey []b
 		return conn, err
 	}
 
-	mediaAddr := fmt.Sprintf("%s:%d", targetHostname, conn.AssignedMediaPort)
-	conn.MediaConn, err = net.Dial("udp", mediaAddr)
+	mediaAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", targetHostname, conn.AssignedMediaPort))
+	if err != nil {
+		return conn, err
+	}
+	conn.MediaAddr = mediaAddr
+	conn.MediaConn, err = net.DialUDP("udp", nil, mediaAddr)
 	if err != nil {
 		return conn, err
 	}
@@ -154,7 +158,7 @@ func (conn *Conn) sendMediaStart() (err error) {
 
 	return nil
 }
-func (conn *Conn) Heartbeat(ctx context.Context) error {
+func (conn *Conn) Heartbeat() error {
 	ticker := time.NewTicker(5 * time.Second)
 
 	for {
@@ -170,10 +174,6 @@ func (conn *Conn) Heartbeat(ctx context.Context) error {
 			} else {
 				conn.failedHeartbeats = 0
 			}
-		case <-ctx.Done():
-			conn.Close()
-			ticker.Stop()
-			return ctx.Err()
 		case <-conn.quitTimer:
 			ticker.Stop()
 			return nil

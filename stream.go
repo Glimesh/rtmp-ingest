@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -18,8 +17,8 @@ type Stream struct {
 	// mediaStarted is set after media bytes have come in from the client
 	mediaStarted bool
 
-	relays     map[string]*StreamRelay
-	edgeWriter *edgeWriter
+	relays map[string]*StreamRelay
+	// edgeWriter *edgeWriter
 
 	channelID ftl.ChannelID
 	streamID  ftl.StreamID
@@ -31,8 +30,9 @@ type StreamRelay struct {
 	ftlControlPort int
 	ftlMediaPort   int
 
-	ftlClient *ftl.Conn
-	ftlMedia  net.Conn
+	ftlClient    *ftl.Conn
+	ftlMedia     *net.UDPConn
+	ftlMediaAddr *net.UDPAddr
 }
 
 type StreamManager struct {
@@ -50,14 +50,14 @@ func NewStreamManager(orchestrator orchestrator.Client, service services.Service
 }
 
 func (mgr *StreamManager) NewStream(channelID ftl.ChannelID) error {
-	edgeWriter := NewEdgeWriter()
+	// edgeWriter := NewEdgeWriter()
 
 	stream := &Stream{
 		authenticated: false,
 		mediaStarted:  false,
 		channelID:     channelID,
 		relays:        make(map[string]*StreamRelay),
-		edgeWriter:    edgeWriter,
+		// edgeWriter:    edgeWriter,
 	}
 
 	if _, exists := mgr.streams[channelID]; exists {
@@ -183,16 +183,16 @@ func (mgr *StreamManager) RelayMedia(channelID ftl.ChannelID, targetHostname str
 		ftlMediaPort:   ftlClient.AssignedMediaPort,
 		ftlClient:      ftlClient,
 		ftlMedia:       ftlClient.MediaConn,
+		ftlMediaAddr:   ftlClient.MediaAddr,
 	}
 
 	// setting the rtpWriter is enough to get a stream of packets coming through
 	// ftlClient.MediaConn.SetDeadline(time.Now().Add(time.Second * 5))
 	// stream.rtpWriter.Append(ftlClient.MediaConn)
-	ctx := context.Background()
-	ctx = stream.edgeWriter.new(ctx, targetHostname, ftlClient.MediaConn)
+	// stream.edgeWriter.new(targetHostname, ftlClient.MediaConn)
 
 	// Heartbeat (blocking thread until we get disconnected)
-	return ftlClient.Heartbeat(ctx)
+	return ftlClient.Heartbeat()
 }
 
 func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname string) error {
@@ -207,7 +207,7 @@ func (mgr *StreamManager) StopRelay(channelID ftl.ChannelID, targetHostname stri
 	}
 
 	// Remove from MultiWriter
-	stream.edgeWriter.remove(targetHostname)
+	// stream.edgeWriter.remove(targetHostname)
 
 	if err := stream.relays[targetHostname].close(); err != nil {
 		return err
@@ -227,9 +227,15 @@ func (stream *Stream) WriteRTP(packet *rtp.Packet) error {
 	if err != nil {
 		return err
 	}
+
 	// This can error if the relay is removed in another thread, which is common because an edge will stop being a relay for a stream when there are no viewers on it.
 	// TODO: Figure out how to conditionally error from this.
-	stream.edgeWriter.write(buf)
+	// stream.edgeWriter.write(buf)
+	for _, relay := range stream.relays {
+		// Need to make sure using relay.ftlMedia is fine here
+		relay.ftlMedia.WriteToUDP(buf, relay.ftlMediaAddr)
+	}
+
 	return nil
 }
 

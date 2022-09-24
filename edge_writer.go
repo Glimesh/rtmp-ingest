@@ -1,11 +1,9 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"sync"
-	"time"
 )
 
 const bufSize = 1000
@@ -26,26 +24,15 @@ func NewEdgeWriter() *edgeWriter {
 	}
 }
 
-func (edge *edgeWriter) new(ctx context.Context, host string, conn net.Conn) context.Context {
+func (edge *edgeWriter) new(host string, conn *net.UDPConn) {
 	edge.buffers[host] = make(chan []byte, bufSize)
-
-	ctx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		for {
-			if _, ok := edge.buffers[host]; !ok {
-				return
-			}
-
-			conn.SetDeadline(time.Now().Add(5 * time.Second))
-			if _, err := conn.Write(<-edge.buffers[host]); err != nil {
-				// fmt.Println(err)
-				cancel()
-			}
+			// Since this is UDP, _it cannot fail_
+			conn.Write(<-edge.buffers[host])
 		}
 	}()
-
-	return ctx
 }
 
 func (edge *edgeWriter) write(buf []byte) {
