@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	flvtag "github.com/yutopp/go-flv/tag"
 )
@@ -21,6 +22,7 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 	var outBuf []byte
 
 	if video.AVCPacketType == flvtag.AVCPacketTypeNALU {
+		fmt.Println("video.AVCPacketType == flvtag.AVCPacketTypeNALU")
 		for offset := 0; offset < len(videoBuffer); {
 
 			bufferLength := int(binary.BigEndian.Uint32(videoBuffer[offset : offset+headerLengthField]))
@@ -31,9 +33,11 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 			offset += headerLengthField
 
 			if videoBuffer[offset] == spsId {
+				fmt.Println("videoBuffer at offset has spsId")
 				hasSpsPps = true
 				sps = append(annexBPrefix, videoBuffer[offset:offset+bufferLength]...)
 			} else if videoBuffer[offset] == ppsId {
+				fmt.Println("videoBuffer at offset has ppsId")
 				hasSpsPps = true
 				pps = append(annexBPrefix, videoBuffer[offset:offset+bufferLength]...)
 			}
@@ -44,6 +48,7 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 			offset += bufferLength
 		}
 	} else if video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader {
+		fmt.Println("video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader")
 		const spsCountOffset = 5
 		spsCount := videoBuffer[spsCountOffset] & 0x1F
 		offset := 6
@@ -52,6 +57,7 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 			spsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
 			offset += 2
 			if videoBuffer[offset] != spsId {
+				fmt.Println("videoBuffer does not have spsId, this would be a failure")
 				// panic("Failed to parse SPS")
 				return
 			}
@@ -65,6 +71,7 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 			ppsLen := binary.BigEndian.Uint16(videoBuffer[offset : offset+2])
 			offset += 2
 			if videoBuffer[offset] != ppsId {
+				fmt.Println("videoBuffer does not have ppsId, this would be a failure")
 				// panic("Failed to parse PPS")
 				return
 			}
@@ -77,6 +84,7 @@ func appendNALHeaderSpecial(video flvtag.VideoData, videoBuffer []byte) (sps, pp
 
 	// We have an unadorned keyframe, append SPS/PPS
 	if video.FrameType == flvtag.FrameTypeKeyFrame && !hasSpsPps {
+		fmt.Println("Appending sps and pps")
 		outBuf = append(append(sps, pps...), outBuf...)
 	}
 

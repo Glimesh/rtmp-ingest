@@ -19,6 +19,7 @@ import (
 	"github.com/Glimesh/rtmp-ingest/pkg/h264"
 	"github.com/Glimesh/rtmp-ingest/pkg/protocols/ftl"
 	"github.com/Glimesh/rtmp-ingest/pkg/services"
+	h264joy "github.com/nareix/joy5/codec/h264"
 	"github.com/pion/rtp/v2"
 	"github.com/pion/rtp/v2/codecs"
 	"github.com/sirupsen/logrus"
@@ -130,6 +131,8 @@ type ConnHandler struct {
 	debugSaveVideo bool
 	debugVideoFile *os.File
 	lastFullFrame  []byte
+
+	videoJoyCodec *h264joy.Codec
 }
 
 func (h *ConnHandler) OnServe(conn *rtmp.Conn) {
@@ -368,15 +371,31 @@ func (h *ConnHandler) OnVideo(timestamp uint32, payload io.Reader) error {
 		return err
 	}
 
-	// nalus, _ := h264joy.SplitNALUs(data)
-	// annexb := h264joy.JoinNALUsAnnexb(nalus)
-	// avcc := h264joy.JoinNALUsAVCC([][]byte{annexb})
-	// outBuf := avcc
+	// From: https://github.com/nareix/joy5/blob/2c912ca30590ee653145d93873b0952716d21093/cmd/avtool/seqhdr.go#L38-L65
+	// joy5 is an unlicensed project -- need to confirm usage.
+	// Look at video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader to figure out sps and pps
+	// Store those in the stream object, then use them later for the keyframes
+	if video.AVCPacketType == flvtag.AVCPacketTypeSequenceHeader {
+		h.videoJoyCodec, err = h264joy.FromDecoderConfig(data)
+		if err != nil {
+			return err
+		}
+	}
 
 	var outBuf []byte
-	h.sps, h.pps, outBuf = appendNALHeaderSpecial(video, data)
-	// outBuf := appendNALHeader(video, data)
-	// outBuf := data
+	if video.FrameType == flvtag.FrameTypeKeyFrame {
+		pktnalus, _ := h264joy.SplitNALUs(data)
+		nalus := [][]byte{}
+		nalus = append(nalus, h264joy.Map2arr(h.videoJoyCodec.SPS)...)
+		nalus = append(nalus, h264joy.Map2arr(h.videoJoyCodec.PPS)...)
+		nalus = append(nalus, pktnalus...)
+		data := h264joy.JoinNALUsAnnexb(nalus)
+		outBuf = data
+	} else {
+		pktnalus, _ := h264joy.SplitNALUs(data)
+		data := h264joy.JoinNALUsAnnexb(pktnalus)
+		outBuf = data
+	}
 
 	h.debugVideoFile.Write(outBuf)
 
